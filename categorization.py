@@ -6,6 +6,7 @@ import json
 import re
 import unicodedata
 import uuid
+import automation
 from decimal import Decimal
 
 FIELDS = ('category_id','category_name','classification','business_id','status','include_in_totals','excluded')
@@ -31,25 +32,20 @@ def rules(db):
 def matching_rules(row, active_rules):
     if row['status'] == 'approved' or row['excluded'] or row['duplicate_of'] or row['classification'] in {'personal','transfer'} or row['transaction_kind'] == 'transfer':
         return []
-    text = ' '+merchant_text(row['merchant'] or row['description'])+' '
-    return [rule for rule in active_rules if rule['active'] and
-        (not rule['account_id'] or rule['account_id'] == row['account_id']) and
-        (not row['business_id'] or rule['business_id'] == row['business_id']) and
-        ' '+merchant_text(rule['pattern'])+' ' in text]
+    return [rule for rule in active_rules if automation.matches(row,rule)]
 
 
 def suggestion(row, active_rules):
     matches = matching_rules(row,active_rules)
     if not matches:
         return None
-    targets = {(r['business_id'],r['category_name']) for r in matches}
-    if len(targets) != 1:
-        return {'conflict':True,'reason':'Matching merchant rules suggest different categories or businesses.','ruleIds':[r['id'] for r in matches]}
-    rule = matches[0]
+    choice = automation.choose(row,matches)
+    if choice['conflict']: return choice
+    rule = choice['rule']
     if row['business_id'] == rule['business_id'] and row['classification']=='business' and row['category_name'] == rule['category_name']:
         return None
     return {'conflict':False,'category':rule['category_name'],'businessId':rule['business_id'],
-            'reason':'Merchant contains “'+rule['pattern']+'”'+(' on this source account' if rule['account_id'] else ' across accounts'), 'ruleIds':[r['id'] for r in matches]}
+            'reason':choice['reason'], 'ruleIds':choice['ruleIds']}
 
 
 def suggestions(db):

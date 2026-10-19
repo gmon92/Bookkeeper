@@ -27,6 +27,7 @@ import categorization
 import credits
 import workspace_store
 import source_archive
+import automation
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local-bookkeeper")) / "LocalBookkeeper"
@@ -68,7 +69,7 @@ def connect():
 def initialize(initial_business=None) -> None:
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     with connect() as db:
-        if db.execute('PRAGMA user_version').fetchone()[0] > 7:
+        if db.execute('PRAGMA user_version').fetchone()[0] > 8:
             raise RuntimeError('This database was created by a newer version of Local Bookkeeper.')
         db.executescript("""
         CREATE TABLE IF NOT EXISTS businesses (
@@ -174,7 +175,8 @@ def initialize(initial_business=None) -> None:
         db.execute(f'PRAGMA application_id={workspace_store.APP_ID}')
         source_archive.initialize(db, now, DATA_DIR)
         credits.initialize(db)
-        db.execute("PRAGMA user_version=7")
+        automation.initialize(db)
+        db.execute("PRAGMA user_version=8")
 
 
 def activate_workspace(directory, business=None, remember=False):
@@ -483,6 +485,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200,[dict(r) for r in db.execute('SELECT p.id,p.provider,p.format,p.confirmed_at,a.nickname,a.last_four FROM import_profiles p JOIN accounts a ON a.id=p.account_id WHERE p.active=1 ORDER BY p.confirmed_at DESC')])
         if path == '/api/credits/suggestions':
             with connect() as db: return self.send_json(200,credits.suggestions(db))
+        if path == '/api/automation':
+            with connect() as db: return self.send_json(200,automation.overview(db))
         if path == '/api/credits/rules':
             with connect() as db: return self.send_json(200,credits.rules(db))
         if path.startswith('/api/credits/') and path.endswith('/candidates'):
@@ -534,13 +538,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self.export_excel()
         if path == "/api/export.csv":
             return self.export_csv()
-        if path in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js'}:
+        if path in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/automation.css'}:
             return super().do_GET()
         return self.send_error(404)
 
     def do_HEAD(self):
         # SimpleHTTPRequestHandler otherwise allows HEAD to bypass GET's allowlist.
-        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js'}:
+        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/automation.css'}:
             return super().do_HEAD()
         return self.send_error(404)
 
@@ -586,6 +590,17 @@ class Handler(SimpleHTTPRequestHandler):
                     if not db.execute('SELECT id FROM credit_rules WHERE id=?',(body['id'],)).fetchone(): raise ValueError('Credit rule not found.')
                     db.execute('UPDATE credit_rules SET active=? WHERE id=?',(int(body['active']),body['id']))
                 return self.send_json(200,{'ok':True})
+            if path in {'/api/automation/rules','/api/automation/rules/preview','/api/automation/preview','/api/automation/apply'}:
+                body=self.read_json()
+                with connect() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    if path=='/api/automation/rules': result=automation.save(db,body,utc_now())
+                    elif path=='/api/automation/rules/preview': result=automation.rule_preview(db,body)
+                    elif path.endswith('/preview'): result=automation.plan(db,self)[0]
+                    else:
+                        if not isinstance(body.get('revision'),str): raise ValueError('Preview automation before applying.')
+                        result=automation.apply(db,self,utc_now(),revision=body['revision'])
+                return self.send_json(200,result)
             if path in {'/api/categorization/preview','/api/categorization/apply'}:
                 body = self.read_json()
                 with connect() as db:
@@ -737,6 +752,9 @@ class Handler(SimpleHTTPRequestHandler):
                         'kind':tx['transaction_kind'],'category':tx['category_name'],'classification':'unknown','includeInTotals':False}
                     source_archive.save_transaction(db, tx_id, document_id, tx['raw'], tx['source_row'], now, baseline, parsed['extraction'])
                     inserted.append({'id':tx_id, 'duplicateCandidate':possible['id'] if possible else None})
+                automatic = automation.apply(db,self,now,ids=[r['id'] for r in inserted])
+                metadata['automation'] = automatic
+                db.execute('UPDATE documents SET metadata_json=? WHERE id=?',(json.dumps(metadata),document_id))
                 db.execute('DELETE FROM staged_imports WHERE token=?', (body['token'],))
                 if body.get('rememberLayout') is True:
                     db.execute('''INSERT INTO import_profiles(id,account_id,layout_key,provider,format,extraction_json,confirmed_at)
@@ -747,7 +765,7 @@ class Handler(SimpleHTTPRequestHandler):
                 temporary.unlink(missing_ok=True)
                 target.unlink(missing_ok=True)
                 raise
-        return self.send_json(201, {'documentId':document_id, 'rowCount':len(inserted), 'inserted':inserted})
+        return self.send_json(201, {'documentId':document_id, 'rowCount':len(inserted), 'inserted':inserted,'automation':automatic})
 
     def undo_review(self):
         body = self.read_json()

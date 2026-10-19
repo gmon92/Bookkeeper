@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import uuid
+import automation
 
 from categorization import merchant_text, selected_rows
 
@@ -42,14 +43,13 @@ def suggestion(row, saved_rules):
     if row['direction'] != 'credit' or row['duplicate_of'] or row['credit_treatment']:
         return None
     text = ' ' + merchant_text(row['merchant'] or row['description']) + ' '
-    matches = [r for r in saved_rules if r['active'] and (not r['account_id'] or r['account_id']==row['account_id'])
-               and ' '+merchant_text(r['pattern'])+' ' in text]
+    matches = [r for r in saved_rules if automation.matches(row,r)]
     if matches:
-        if len({(r['treatment'],r['business_id'],r['category_name']) for r in matches}) > 1:
-            return {'conflict':True,'reason':'Saved credit rules disagree. Choose how to handle this credit.'}
-        rule = matches[0]
+        choice = automation.choose(row,matches)
+        if choice['conflict']: return choice
+        rule = choice['rule']
         return {'treatment':rule['treatment'],'businessId':rule['business_id'],'category':rule['category_name'],
-                'reason':'Saved credit rule: description contains “'+rule['pattern']+'”. Review before applying.', 'ruleIds':[r['id'] for r in matches]}
+                'reason':choice['reason']+' Review before applying.', 'ruleIds':choice['ruleIds']}
     if re.search(r'\b(mobile payment|online payment|payment thank you|autopay|auto pay|payment received|automatic payment|card payment)\b',text):
         return {'treatment':'payment','reason':'The description looks like a card payment. Confirm it is a transfer between accounts.'}
     if re.search(r'\b(statement credit|cash back|cashback|reward|rewards|benefit credit|digital entertainment credit|walmart credit)\b',text):

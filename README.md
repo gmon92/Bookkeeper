@@ -49,8 +49,8 @@ folder picker is available; enter the absolute path if the picker is unavailable
    credit and type headers within the first 50 rows. An ambiguous signed Amount
    column remains direction-unknown for review. Formula-containing transaction
    rows and multiple transaction tables are rejected with an explanation.
-5. New transactions start unapproved, unassigned and outside expense totals.
-   Provider categories remain source evidence. Review business purpose, category,
+5. New transactions start unapproved, unassigned and outside expense totals before enabled import rules run.
+   Provider categories remain source evidence. Enabled automation rules may assign categories; review business purpose, category,
    direction and kind yourself. Card payments are suggested as transfers; merchant
    credits require review before being treated as refunds.
 6. **Review queue** supports individual editing and batch actions. Expense totals
@@ -133,7 +133,7 @@ shown in All activity/Personal until assigned to a business.
   to broaden scope. A saved rule survives undoing transaction changes and can be
   paused independently.
 - **Merchant rules** lets you create, preview, edit, pause and enable rules.
-  Suggestions are computed for new/unreviewed activity; reviewed transactions
+  Existing rules start in Suggest only mode. Suggestions are computed for new/unreviewed activity; reviewed transactions
   remain in place. Conflicting destinations are flagged instead of choosing one.
   Select matching rows and **Apply rule suggestions** to preview and save their
   proposed categories. Applied suggestions remain unapproved and outside totals.
@@ -142,6 +142,47 @@ The fastest first pass for a structured card statement is often **More filters �
 Statement category → Select all results → Categorize & assign**. Use merchant
 groups and saved rules for the repeat work in later imports. Selection is limited
 to the current filtered results and the server accepts up to 5,000 rows per batch.
+
+## Rules & automation
+
+Open the **Rules & automation** sidebar tab to manage expense and credit rules
+in one place. Existing saved rules retain their destinations and begin in
+**Suggest only** mode.
+
+- Create rules from any category card, or choose **Create rule**. Add up to 30
+  merchant phrases (one per line; any phrase can match), an exact original
+  statement category, source account and optional USD amount bounds. All other
+  supplied conditions must match together. Expense rules match money out; credit
+  rules match money in.
+- Choose the business/category or a credit treatment: payment, refund, statement
+  benefit or other excluded credit. Refunds may belong to business books or stay
+  outside them. Rules never automatically link payment pairs or original purchases.
+- **Suggest only** proposes a decision. **Auto-categorize** assigns it during
+  import and leaves the row awaiting review, outside expense totals.
+  **Auto-review** requires the explicit trusted-rule checkbox. Including eligible
+  business expenses/refunds in totals requires another separate checkbox.
+- Preview historical matches before saving. Saving a rule affects future imports;
+  it does not silently change existing rows. **Preview rules on existing rows**
+  shows the exact proposed changes across all books and years before applying.
+  Reviewed, excluded, linked and possible duplicate rows remain in place.
+- Rules with merchant phrases outrank broad original-category mappings. Within
+  that level, account-specific rules outrank rules across all accounts, followed
+  by original-category and amount conditions. Equally specific conflicting
+  destinations stay for review. Identical destinations use the least automatic
+  setting when their automation levels differ.
+- **Rule ideas** are generated from at least two consistent reviewed decisions
+  for a merchant/account. Review and save each idea yourself before it can run.
+- Each confirmed import shows categorized, automatically reviewed, suggestion,
+  conflict, unmatched and attention counts. Open each result group to inspect its
+  rows. **Imports → Automation results** reopens the historical summary.
+- Transaction explanations and history record the matching conditions and rule
+  identifier. **Undo automatic decisions** reverses an import's automation while
+  retaining its original rows/files. Later edits are retained as conflicts.
+  Existing-row automation is also undoable in **Data & storage**.
+
+Schema version 8 adds rule settings while preserving existing transaction values,
+rule destinations and original source archives. No automatic behavior is enabled
+for existing saved rules by this upgrade.
 
 ## Credits and card payments
 
@@ -173,8 +214,7 @@ Saved credit decisions, pair links and reporting effects have audit history and
 can be undone in **Data & storage**. Saved description rules remain available
 after undo and can be paused in **Credit rules**.
 
-Description suggestions and saved rules never automatically approve credits or
-include refunds. Existing imports and approvals are preserved during the schema
+Built-in description suggestions never automatically approve credits or include refunds. Saved credit rules start in Suggest only mode; their automation settings can be changed explicitly in Rules & automation. Existing imports and approvals are preserved during the schema
 upgrade and appear in **Needs decision** until a specific credit decision is
 recorded. A business's normal ledger shows its assigned business activity and
 unassigned activity on its owned accounts. Transfers and credits placed outside
@@ -296,6 +336,16 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
   preview `revision`.
 - `GET /api/suggestions`, `GET /api/rules`, `POST /api/rules/preview`,
   `POST /api/rules` — local merchant rules and non-approving suggestions.
+- `GET /api/automation` — unified rules, historical match counts, rule ideas and
+  automation action statuses.
+- `POST /api/automation/rules/preview`, `POST /api/automation/rules` — preview/save
+  expense or credit rules with `patterns`, `sourceCategory`, `accountId`, optional
+  `minAmount`/`maxAmount`, business/category or credit treatment, `mode`
+  (`suggest`, `categorize`, `review`) and explicit `includeInTotals`.
+  `id`, `type` and boolean `active` pause/enable an existing rule.
+- `POST /api/automation/preview`, `POST /api/automation/apply` — preview/apply
+  enabled automation to eligible existing rows. Apply requires the preview
+  `revision`; intervening rule or transaction changes require a fresh preview.
 - `GET /api/credits/suggestions`, `GET /api/credits/rules` — credit-only
   suggestions and saved description rules; `POST /api/credits/rules` accepts
   rule `id` and boolean `active` to pause/enable a rule.
