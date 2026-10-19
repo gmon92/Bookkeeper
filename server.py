@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import sqlite3
+import socket
 import threading
 import zipfile
 import uuid
@@ -23,6 +24,7 @@ from statement_import import parse_statement
 from reports import excel_report, safe_text
 from backup import create_backup, restore_backup
 import categorization
+import credits
 import workspace_store
 import source_archive
 
@@ -66,7 +68,7 @@ def connect():
 def initialize(initial_business=None) -> None:
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     with connect() as db:
-        if db.execute('PRAGMA user_version').fetchone()[0] > 6:
+        if db.execute('PRAGMA user_version').fetchone()[0] > 7:
             raise RuntimeError('This database was created by a newer version of Local Bookkeeper.')
         db.executescript("""
         CREATE TABLE IF NOT EXISTS businesses (
@@ -171,7 +173,8 @@ def initialize(initial_business=None) -> None:
         db.execute("INSERT OR IGNORE INTO app_metadata VALUES('workspace_id',?)",(str(uuid.uuid4()),))
         db.execute(f'PRAGMA application_id={workspace_store.APP_ID}')
         source_archive.initialize(db, now, DATA_DIR)
-        db.execute("PRAGMA user_version=6")
+        credits.initialize(db)
+        db.execute("PRAGMA user_version=7")
 
 
 def activate_workspace(directory, business=None, remember=False):
@@ -398,12 +401,24 @@ def transaction_json(row: sqlite3.Row) -> dict:
         "direction": row["direction"], "kind": row["transaction_kind"], "classification": row["classification"],
         "includeInTotals": bool(row["include_in_totals"]), "category": row["category_name"], "status": row["status"],
         "excluded": bool(row['excluded']),
+        "creditTreatment": row['credit_treatment'], "relatedTransactionId": row['related_transaction_id'],
         "duplicateOf": row["duplicate_of"], "duplicateCandidate": row["duplicate_candidate"],
         "sourceRow": row["source_row"], "sourceFilename": row["source_filename"],
         "sourceSheet": raw.get('sheet'),
         "sourceCategory": row['original_source_category'] if 'original_source_category' in row.keys() and row['original_source_category'] is not None else source_archive.category(raw),
         "notes": row["notes"], "fingerprint": row["source_fingerprint"],
     }
+
+
+class LocalHTTPServer(ThreadingHTTPServer):
+    # Windows SO_REUSEADDR permits two live servers to share a port, allowing
+    # an older process to keep serving stale code after an apparent restart.
+    allow_reuse_address = os.name != 'nt'
+
+    def server_bind(self):
+        if os.name == 'nt':
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -466,6 +481,13 @@ class Handler(SimpleHTTPRequestHandler):
         if path == '/api/import-profiles':
             with connect() as db:
                 return self.send_json(200,[dict(r) for r in db.execute('SELECT p.id,p.provider,p.format,p.confirmed_at,a.nickname,a.last_four FROM import_profiles p JOIN accounts a ON a.id=p.account_id WHERE p.active=1 ORDER BY p.confirmed_at DESC')])
+        if path == '/api/credits/suggestions':
+            with connect() as db: return self.send_json(200,credits.suggestions(db))
+        if path == '/api/credits/rules':
+            with connect() as db: return self.send_json(200,credits.rules(db))
+        if path.startswith('/api/credits/') and path.endswith('/candidates'):
+            query = parse_qs(urlparse(self.path).query)
+            with connect() as db: return self.send_json(200,credits.candidates(db,path.split('/')[3],query.get('treatment',[''])[0],query.get('q',[''])[0]))
         if path.startswith('/api/documents/') and path.endswith('/source'):
             query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
             offset = int(query.get('offset', ['0'])[0])
@@ -512,13 +534,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self.export_excel()
         if path == "/api/export.csv":
             return self.export_csv()
-        if path in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css'}:
+        if path in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css'}:
             return super().do_GET()
         return self.send_error(404)
 
     def do_HEAD(self):
         # SimpleHTTPRequestHandler otherwise allows HEAD to bypass GET's allowlist.
-        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css'}:
+        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css'}:
             return super().do_HEAD()
         return self.send_error(404)
 
@@ -548,6 +570,21 @@ class Handler(SimpleHTTPRequestHandler):
             if path == '/api/import-profiles/revoke':
                 body = self.read_json()
                 with connect() as db: db.execute('UPDATE import_profiles SET active=0 WHERE id=?',(body.get('id'),))
+                return self.send_json(200,{'ok':True})
+            if path in {'/api/credits/preview','/api/credits/apply'}:
+                body = self.read_json()
+                with connect() as db:
+                    if path.endswith('/apply'):
+                        db.execute('BEGIN IMMEDIATE')
+                        result = credits.commit(db,body,self,utc_now())
+                    else: result = credits.plan(db,body,self.validate_transaction)[0]
+                return self.send_json(200,result)
+            if path == '/api/credits/rules':
+                body = self.read_json()
+                if set(body) != {'id','active'} or type(body['active']) is not bool: raise ValueError('Choose a credit rule and whether it is active.')
+                with connect() as db:
+                    if not db.execute('SELECT id FROM credit_rules WHERE id=?',(body['id'],)).fetchone(): raise ValueError('Credit rule not found.')
+                    db.execute('UPDATE credit_rules SET active=? WHERE id=?',(int(body['active']),body['id']))
                 return self.send_json(200,{'ok':True})
             if path in {'/api/categorization/preview','/api/categorization/apply'}:
                 body = self.read_json()
@@ -600,10 +637,10 @@ class Handler(SimpleHTTPRequestHandler):
                         raise ValueError('Finish or wait for existing import previews to expire before adding more files.')
                     db.execute('INSERT INTO staged_imports VALUES(?,?,?,?,?)', (token, content, json.dumps(parsed), file_hash, dt.datetime.now().timestamp()))
                 debits = sum(r["amount_cents"] for r in parsed["rows"] if r["direction"] == "debit")
-                credits = sum(r["amount_cents"] for r in parsed["rows"] if r["direction"] == "credit")
+                credit_total = sum(r["amount_cents"] for r in parsed["rows"] if r["direction"] == "credit")
                 return self.send_json(200, {"token": token, "filename": filename, "fileHash": file_hash,
                     "alreadyImported": bool(existing), "possibleDuplicates": duplicate_count,
-                    "rowCount": len(parsed["rows"]), "debitCents": debits, "creditCents": credits,
+                    "rowCount": len(parsed["rows"]), "debitCents": debits, "creditCents": credit_total,
                     "headers": parsed["headers"], "warnings": parsed["warnings"],
                     "provider": parsed['provider'], "reconciliation": parsed['reconciliation'], "requiresMappingConfirmation": parsed['provider'] == 'American Express',
                     'extraction':parsed['extraction'],'rememberedLayouts':profiles,
@@ -814,6 +851,8 @@ class Handler(SimpleHTTPRequestHandler):
                     raise ValueError('Choose a category belonging to this business.')
                 values['category_id'] = category['id']
             self.validate_transaction(db, values)
+            if any(values[k]!=current[k] for k in ('amount_cents','account_id','direction','transaction_kind')) and (current['related_transaction_id'] or db.execute('SELECT 1 FROM transactions WHERE related_transaction_id=?',(transaction_id,)).fetchone()):
+                raise ValueError('Unlink this transaction in Credits & payments before changing its amount, source account, movement or kind.')
             values["updated_at"] = now
             db.execute("""UPDATE transactions SET date=?,posted_date=?,description=?,merchant=?,account_id=?,amount_cents=?,direction=?,transaction_kind=?,classification=?,business_id=?,category_id=?,category_name=?,status=?,include_in_totals=?,excluded=?,notes=?,updated_at=? WHERE id=?""",
               (values["date"],values["posted_date"],values["description"],values["merchant"],values["account_id"],values["amount_cents"],values["direction"],values["transaction_kind"],values["classification"],values["business_id"],values["category_id"],values["category_name"],values["status"],values["include_in_totals"],values['excluded'],values["notes"],now,transaction_id))
@@ -825,6 +864,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     @staticmethod
     def validate_transaction(db, values, check_category=True):
+        credits.validate_treatment(values)
         if values['status'] not in {'needs_review','suggested','approved'}:
             raise ValueError('Choose a valid review status.')
         if type(values['amount_cents']) is not int or not 0 <= values['amount_cents'] <= 999999999999:
@@ -929,15 +969,15 @@ class Handler(SimpleHTTPRequestHandler):
             parameters.extend((year + "-01-01", str(int(year) + 1).zfill(4) + "-01-01"))
         extra_where = (" AND " + " AND ".join(filters)) if filters else ""
         with connect() as db:
-            rows=db.execute("""SELECT t.date,t.description,a.nickname,a.last_four,t.category_name,t.amount_cents,t.direction,t.classification,t.status,d.filename,t.source_row
+            rows=db.execute("""SELECT t.date,t.description,a.nickname,a.last_four,t.category_name,t.amount_cents,t.direction,t.classification,t.status,d.filename,t.source_row,t.credit_treatment,t.related_transaction_id
               FROM transactions t JOIN accounts a ON a.id=t.account_id LEFT JOIN documents d ON d.id=t.document_id
-              WHERE t.status='approved' AND t.classification='business' AND t.include_in_totals=1 AND ((t.direction='debit' AND t.transaction_kind IN ('expense','fee')) OR (t.direction='credit' AND t.transaction_kind='refund')) AND t.duplicate_of IS NULL""" + extra_where +
+              WHERE t.status='approved' AND t.excluded=0 AND t.classification='business' AND t.include_in_totals=1 AND ((t.direction='debit' AND t.transaction_kind IN ('expense','fee')) OR (t.direction='credit' AND t.transaction_kind='refund')) AND t.duplicate_of IS NULL""" + extra_where +
               " ORDER BY t.date,t.created_at", parameters).fetchall()
         out=io.StringIO(newline=""); writer=csv.writer(out)
-        writer.writerow(["Date","Description","Source account","Category","Amount USD","Direction","Classification","Review status","Source document","Source row"])
+        writer.writerow(["Date","Description","Source account","Category","Amount USD","Direction","Classification","Review status","Source document","Source row","Credit decision","Related transaction ID"])
         for r in rows:
             signed_cents = -r["amount_cents"] if r["direction"] == "credit" else r["amount_cents"]
-            writer.writerow([r["date"],safe_text(r["description"]),safe_text(r["nickname"]+(f" ···· {r['last_four']}" if r["last_four"] else "")),safe_text(r["category_name"]),f"{Decimal(signed_cents)/100:.2f}",r["direction"],r["classification"],r["status"],safe_text(r["filename"]),r["source_row"] or ""])
+            writer.writerow([r["date"],safe_text(r["description"]),safe_text(r["nickname"]+(f" ···· {r['last_four']}" if r["last_four"] else "")),safe_text(r["category_name"]),f"{Decimal(signed_cents)/100:.2f}",r["direction"],r["classification"],r["status"],safe_text(r["filename"]),r["source_row"] or "",credits.LABELS.get(r["credit_treatment"],"") if r["direction"]=="credit" or r["credit_treatment"] else "",r["related_transaction_id"] or ""])
         data=out.getvalue().encode("utf-8-sig")
         self.send_response(200);self.send_header("Content-Type","text/csv; charset=utf-8");self.send_header("Content-Disposition","attachment; filename=expense-ledger.csv");self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data)
 
@@ -994,7 +1034,7 @@ def main() -> None:
             activate_workspace(directory)
         except (ValueError,OSError,sqlite3.Error) as exc:
             SETUP_ERROR = str(exc)
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server = LocalHTTPServer((HOST, PORT), Handler)
     print(f"Local Bookkeeper running at http://{HOST}:{PORT}")
     if WORKSPACE_READY:
         print(f"SQLite database: {DB_PATH}")

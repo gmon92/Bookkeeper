@@ -133,6 +133,45 @@ Statement category → Select all results → Categorize & assign**. Use merchan
 groups and saved rules for the repeat work in later imports. Selection is limited
 to the current filtered results and the server accepts up to 5,000 rows per batch.
 
+## Credits and card payments
+
+Open **Credits & payments** to review money-in transactions separately from
+charges. The queue uses the imported money movement; source amount signs vary
+by provider. Filter descriptions/accounts, select rows, or make one decision for
+an entire recurring-credit group. Merchant and statement-category groups also
+offer **Handle credits** for their money-in rows.
+
+- **Card payment / transfer** keeps payments outside income and expense totals.
+  Optionally link an equal bank withdrawal on a different source account; the
+  preview explicitly includes both sides and marks them as transfers.
+- **Statement credit / account benefit** keeps a Walmart-style benefit or reward
+  outside business books. Its original membership charge retains its own
+  category and expense decision.
+- **Purchase refund / reversal** can be recorded outside business books or
+  assigned to a business expense category. Only the explicit **Reduce business
+  expense totals by this refund** checkbox makes it reduce expenses. An optional
+  purchase link helps compare the two rows, including partial refunds.
+- **Other credit outside business books** excludes the credit while retaining
+  its source and full activity history. **Leave unclear** returns it to review
+  outside totals.
+
+Related-transaction matching suggests compatible amounts/accounts/dates. Search
+by description, date or amount to find another compatible match. Related rows
+are visible in transaction details; linked amount/account/movement changes
+require unlinking first. Preview revisions protect against intervening edits.
+Saved credit decisions, pair links and reporting effects have audit history and
+can be undone in **Data & storage**. Saved description rules remain available
+after undo and can be paused in **Credit rules**.
+
+Description suggestions and saved rules never automatically approve credits or
+include refunds. Existing imports and approvals are preserved during the schema
+upgrade and appear in **Needs decision** until a specific credit decision is
+recorded. A business's normal ledger shows its assigned business activity and
+unassigned activity on its owned accounts. Transfers and credits placed outside
+business books remain in **All businesses**; the credit workspace also retains
+them for its owned accounts. Excel/CSV exports include recorded credit decisions
+and related transaction identifiers.
+
 ## Storage and backups
 
 Your chosen books folder contains `bookkeeper.sqlite3` and managed originals in
@@ -233,6 +272,8 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
 - `POST /api/review/batch` — unique `ids`, `action`, optional `businessId`
 - `GET /api/review/actions`, `GET /api/transactions/{id}/history`
 - `GET /api/transactions/{id}/explanation`
+- `GET /api/documents/{id}/source` — SQLite source archive, optional `sheet` and
+  `offset` for pages of 100 stored rows.
 - `GET /api/import-profiles`, `POST /api/import-profiles/revoke` — remembered
   import layouts and revocation by profile `id`.
 - `POST /api/review/undo` — `actionId`
@@ -245,3 +286,21 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
   preview `revision`.
 - `GET /api/suggestions`, `GET /api/rules`, `POST /api/rules/preview`,
   `POST /api/rules` — local merchant rules and non-approving suggestions.
+- `GET /api/credits/suggestions`, `GET /api/credits/rules` — credit-only
+  suggestions and saved description rules; `POST /api/credits/rules` accepts
+  rule `id` and boolean `active` to pause/enable a rule.
+- `GET /api/credits/{id}/candidates?treatment=payment|refund` — possible related
+  transactions; optional `q` searches compatible original rows.
+- `POST /api/credits/preview`, `POST /api/credits/apply` — selected `ids`,
+  `treatment` (`payment`, `refund`, `statement_credit`, `excluded_credit`, or
+  empty for unclear). Refunds specify `refundUsage` (`business` or `outside`),
+  business/category and explicit `includeInTotals`. A single-credit decision
+  may include `relatedId` (or null to unlink). Apply requires the preview
+  `revision`. Optional `rememberRule`, `rulePattern`, `ruleAccountId` and
+  `ruleAllAccounts` create a suggestion rule.
+
+Run the financial and source-retention regression checks with:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```

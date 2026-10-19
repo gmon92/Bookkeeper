@@ -34,7 +34,7 @@ const paths = {
 };
 const icon = name => '<svg viewBox="0 0 24 24" aria-hidden="true">' + (paths[name] || paths.file) + '</svg>';
 const e = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const pageNames = { overview: 'Overview', review: 'Review queue', transactions: 'Transactions', imports: 'Imports', accounts: 'Accounts', reports: 'Reports', settings: 'Data & storage' };
+const pageNames = { overview: 'Overview', review: 'Review queue', transactions: 'Transactions', credits: 'Credits & payments', imports: 'Imports', accounts: 'Accounts', reports: 'Reports', settings: 'Data & storage' };
 const state = { transactions: [], accounts: [], businesses: [], categories: [], documents: [], health: null, connected: false, ready: false, page: 'overview', workspace: 'all', year: String(new Date().getFullYear()), query: '', account: '', tab: 'all', document: '', selected: new Set(), preview: null, batchAction: '', loadingFile: false };
 try { state.workspace = localStorage.getItem('bookkeeper.workspace') || 'all'; } catch {}
 
@@ -50,7 +50,7 @@ function workspaceName() { return state.workspace === 'all' ? 'All businesses' :
 function scopedTransactions() {
   if (state.workspace === 'all') return state.transactions;
   if (state.workspace === 'personal') return state.transactions.filter(t => t.classification === 'personal' || (t.classification === 'unknown' && !state.accounts.find(a => a.id === t.accountId)?.business_id));
-  return state.transactions.filter(t => t.businessId === state.workspace || (!t.businessId && state.accounts.find(a => a.id === t.accountId)?.business_id === state.workspace));
+  return state.transactions.filter(t => t.businessId === state.workspace || (t.classification==='unknown' && !t.businessId && state.accounts.find(a => a.id === t.accountId)?.business_id === state.workspace));
 }
 function inYear(t) { return state.year === 'all' || t.date?.startsWith(state.year + '-'); }
 function scopedAccounts() { return state.accounts.filter(a => state.workspace === 'all' || (state.workspace === 'personal' ? !a.business_id || state.transactions.some(t=>t.accountId===a.id&&t.classification==='personal') : a.business_id === state.workspace || state.transactions.some(t => t.accountId === a.id && t.businessId === state.workspace))); }
@@ -116,6 +116,8 @@ function updateBatchBar() {
   const bar = $('#batch-bar'); if (!bar) return;
   const count = state.selected.size; bar.hidden = !count;
   bar.innerHTML = '<span><strong>' + count + '</strong> selected <small class="quick-shortcut">C to categorize</small></span><button class="button button-ink" data-quick="categorize">Categorize & assign</button>' + ([...state.selected].some(id=>state.suggestions?.[id]&&!state.suggestions[id].conflict)?'<button class="button button-secondary" data-quick="suggestions">Apply rule suggestions</button>':'') + '<button class="button button-secondary" data-batch="personal">Personal</button><button class="button button-secondary" data-batch="transfer">Transfer</button><button class="button button-secondary" data-batch="exclude">Exclude</button><button class="button button-secondary" data-batch="approve">Review only</button><button class="button button-ink" data-batch="include">Review & include</button><button class="icon-button" data-action="clear-selection" aria-label="Clear selection">' + icon('close') + '</button>';
+  const credits=state.transactions.filter(t=>state.selected.has(t.id)&&t.direction==='credit');
+  if(credits.length)bar.insertAdjacentHTML('beforeend','<button class="button button-secondary" data-review-selected-credits>Handle selected credits ('+credits.length+')</button>');
 }
 
 function renderImports() {
@@ -142,13 +144,14 @@ function renderSettings() {
 function render() {
   if(state.setupRequired||state.setupEditing){renderBooksSetup();return;}
   setupGate(false);
-  const renderers={overview:renderOverview,review:renderLedger,transactions:renderLedger,imports:renderImports,accounts:renderAccounts,reports:renderReports,settings:renderSettings};
+  const renderers={overview:renderOverview,review:renderLedger,transactions:renderLedger,credits:renderCredits,imports:renderImports,accounts:renderAccounts,reports:renderReports,settings:renderSettings};
   $('#page').innerHTML=(renderers[state.page]||renderOverview)();
   $('#breadcrumb').textContent=pageNames[state.page];
   $$('[data-nav]').forEach(a=>{a.classList.toggle('active',a.dataset.nav===state.page); if(a.dataset.nav===state.page) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current');});
   $('#review-badge').textContent=scopedTransactions().filter(isReview).length;
   $('#import-dot').hidden=!scopedDocuments().length;
   if(state.page==='transactions'||state.page==='review') updateLedger();
+  if(state.page==='credits')refreshCreditResults();
   $$('[data-year]').forEach(select=>select.value=state.year);
   hydrateIcons();
   if(state.page==='settings'&&state.connected)loadReviewActions();
@@ -176,8 +179,8 @@ async function loadData({quiet=false}={}) {
   try {
     const health=await api('/api/health');state.health=health;
     if(health.setupRequired){Object.assign(state,{setupRequired:true,connected:false,ready:true,transactions:[],accounts:[],businesses:[],categories:[],documents:[],rules:[],suggestions:{},importProfiles:[]});booksSetup.info=health.setup;render();return;}
-    const [transactions,accounts,businesses,categories,documents,rules,suggestions,importProfiles]=await Promise.all(['/api/transactions','/api/accounts','/api/businesses','/api/categories','/api/documents','/api/rules','/api/suggestions','/api/import-profiles'].map(path=>api(path)));
-    Object.assign(state,{health,transactions,accounts,businesses,categories,documents,rules,suggestions,importProfiles,setupRequired:false,connected:true,ready:true});
+    const [transactions,accounts,businesses,categories,documents,rules,suggestions,importProfiles,creditSuggestions,creditRules]=await Promise.all(['/api/transactions','/api/accounts','/api/businesses','/api/categories','/api/documents','/api/rules','/api/suggestions','/api/import-profiles','/api/credits/suggestions','/api/credits/rules'].map(path=>api(path)));
+    Object.assign(state,{health,transactions,accounts,businesses,categories,documents,rules,suggestions,importProfiles,creditSuggestions,creditRules,setupRequired:false,connected:true,ready:true});
     if(!['all','personal',...businesses.map(b=>b.id)].includes(state.workspace))state.workspace='all';
     populateWorkspaces();connectionUI();render();if(!quiet)toast('Your books are up to date.');
   } catch(error) {state.connected=false;state.ready=true;connectionUI(error);render();if(!quiet&&location.protocol!=='file:')toast(error.message);}
@@ -253,6 +256,9 @@ function openEditor(id) {
   const radio=$('input[name=classification][value="'+t.classification+'"]',form);if(radio)radio.checked=true;
   setCategories(business,t.category);syncEditor();form.elements.includeInTotals.checked=included(t);
   $('#editor-amount').innerHTML='<strong>'+signedMoney(t)+'</strong>'+statusMarkup(t);
+  let creditPanel=$('#editor-credit-actions');if(!creditPanel){$('#editor-amount').insertAdjacentHTML('afterend','<div id="editor-credit-actions"></div>');creditPanel=$('#editor-credit-actions');}
+  const related=state.transactions.find(r=>r.id===t.relatedTransactionId),refunds=state.transactions.filter(r=>r.relatedTransactionId===t.id&&r.creditTreatment==='refund');
+  creditPanel.innerHTML=(t.direction==='credit'||t.creditTreatment==='payment'?'<div class="credit-drawer-actions"><strong>'+e(creditLabels[t.creditTreatment||'']||'Money-in decision')+'</strong><p>'+e(t.direction==='credit'?creditSuggestion(t)?.reason||creditDecisionText(t):'Linked payment withdrawal · outside expense totals')+'</p>'+(related?'<p>Related: <button type="button" class="text-button" data-edit="'+e(related.id)+'">'+e(related.date)+' · '+e(related.description)+' · '+money(related.amountCents)+'</button></p>':'')+'<button type="button" class="button button-secondary button-small" data-editor-credit="'+e(t.direction==='credit'?t.id:t.relatedTransactionId||'')+'">'+(t.direction==='credit'?'Handle this credit / payment':t.relatedTransactionId?'Review the linked card payment':'Open Credits & payments')+'</button></div>':'')+(refunds.length?'<div class="credit-drawer-actions"><strong>Related refunds</strong>'+refunds.map(r=>'<p>'+e(r.date)+' · '+money(r.amountCents)+' · '+(included(r)?'Reduces business expenses':'Outside totals')+'</p>').join('')+'</div>':'');
   $('#editor-warnings').innerHTML=t.duplicateOf?'<div class="callout"><p>This is a confirmed duplicate of '+e(t.duplicateOf)+'. It remains outside expense totals.</p></div>':t.duplicateCandidate?'<div class="callout">'+icon('warning')+'<p><strong>Possible duplicate.</strong> This matches another transaction on the same source account. Compare the evidence before including it in totals.</p></div>':'';
   $('#source-evidence').innerHTML=[['Original document',t.sourceFilename||'Manual entry'],['Statement category',t.sourceCategory||'—'],['Source sheet',t.sourceSheet||'—'],['Source row',t.sourceRow||'—'],['Original amount',t.rawAmountText||'—'],['Source cents',t.sourceAmountCents??'—'],['Source account',t.account],['Transaction ID',t.id]].map(([label,value])=>'<dt>'+label+'</dt><dd>'+e(value)+'</dd>').join('');
   if(t.duplicateCandidate&&!t.duplicateOf){

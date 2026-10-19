@@ -3,6 +3,7 @@ import io
 import json
 from collections import defaultdict
 from decimal import Decimal
+from credits import LABELS as CREDIT_LABELS
 
 
 def safe_text(value):
@@ -24,10 +25,10 @@ def excel_report(rows, business_label, year):
     from openpyxl.utils import get_column_letter
     workbook = Workbook()
     workbook.remove(workbook.active)
-    headers = ['Date','Description','Business','Source account','Category','Expense USD','Amount USD','Direction','Kind','Classification','Review status','Included in totals','Source document','Source sheet','Source row','Transaction ID','Duplicate of','Notes']
+    headers = ['Date','Description','Business','Source account','Category','Expense USD','Amount USD','Direction','Kind','Classification','Review status','Included in totals','Source document','Source sheet','Source row','Transaction ID','Duplicate of','Notes','Credit decision','Related transaction ID']
     def ledger_row(row):
         raw = json.loads(row['source_raw_json'])
-        return [row['date'],safe_text(row['description']),safe_text(row['business_name']),safe_text(row['nickname'] + (' ···· '+row['last_four'] if row['last_four'] else '')),safe_text(row['category_name']),Decimal(expense_cents(row))/100 if included(row) else None,Decimal(row['amount_cents'])/100,row['direction'],row['transaction_kind'],row['classification'],row['status'],bool(included(row)),safe_text(row['filename']),safe_text(raw.get('sheet')),row['source_row'],row['id'],row['duplicate_of'],safe_text(row['notes'])]
+        return [row['date'],safe_text(row['description']),safe_text(row['business_name']),safe_text(row['nickname'] + (' ···· '+row['last_four'] if row['last_four'] else '')),safe_text(row['category_name']),Decimal(expense_cents(row))/100 if included(row) else None,Decimal(row['amount_cents'])/100,row['direction'],row['transaction_kind'],row['classification'],row['status'],bool(included(row)),safe_text(row['filename']),safe_text(raw.get('sheet')),row['source_row'],row['id'],row['duplicate_of'],safe_text(row['notes']),CREDIT_LABELS.get(row['credit_treatment'],'') if row['direction']=='credit' or row['credit_treatment'] else '',row['related_transaction_id']]
     def sheet(name, titles, records, money_columns=()):
         tab = workbook.create_sheet(name)
         tab.append([safe_text(business_label) + ' · ' + str(year or 'All years')])

@@ -123,6 +123,8 @@ def plan(db, body, validate):
         try:
             if row['duplicate_of'] or row['classification']=='transfer' or row['transaction_kind']=='transfer':
                 raise ValueError('Duplicate or transfer: use its separate review action.')
+            if row['direction']=='credit' and row['credit_treatment']!='refund':
+                raise ValueError('Use Credits & payments to choose whether this is a payment, refund or excluded credit.')
             new = {key:row[key] for key in FIELDS}
             if mode == 'suggestions':
                 match = suggestion(row,all_rules)
