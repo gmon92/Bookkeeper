@@ -56,6 +56,44 @@ Reports assist bookkeeping and tax preparation; inclusion is not a determination
 of tax deductibility. Unassigned activity on personal/shared source accounts is
 shown in All activity/Personal until assigned to a business.
 
+## Fast categorization
+
+**Transactions** and **Review queue** now have a shared categorization workspace:
+
+- Quick filters for uncategorized, unassigned, rule suggestions, duplicates and
+  review status. More filters includes the statement's original category, your
+  category, books assignment, movement, date range and amount range.
+- Search matches merchant, description, account, category, original statement
+  category, filename and notes. Space-separated words must all match; `|` separates
+  alternatives, for example `shell | exxon`. Press `/` to focus search.
+- **Merchant groups** brings repeated descriptions together within each source
+  account. Long numeric references are ignored for grouping only; the original
+  descriptions remain unchanged. Open a group to inspect its rows.
+- Select rows, a merchant group or all filtered results, then **Categorize &
+  assign** (keyboard: `C`). Choose a business and category, optionally create a
+  custom category, then preview the exact changes before saving. Keep current
+  business assignments when categorizing across already-assigned businesses.
+- Categorizing alone saves rows for review and keeps them outside totals.
+  **Mark reviewed** and **Include eligible expenses** are separate explicit
+  choices. Transfers, confirmed duplicates and invalid reporting rows require
+  separate attention. An exception prevents the entire batch from being saved.
+- Preview revisions detect intervening transaction or rule changes. Every
+  applied batch has field history and can be reversed in **Data & storage**.
+- **Remember this merchant** can save a source-account-scoped rule with the batch.
+  The phrase must match every selected row. Choose All source accounts explicitly
+  to broaden scope. A saved rule survives undoing transaction changes and can be
+  paused independently.
+- **Merchant rules** lets you create, preview, edit, pause and enable rules.
+  Suggestions are computed for new/unreviewed activity; reviewed transactions
+  remain in place. Conflicting destinations are flagged instead of choosing one.
+  Select matching rows and **Apply rule suggestions** to preview and save their
+  proposed categories. Applied suggestions remain unapproved and outside totals.
+
+The fastest first pass for a structured card statement is often **More filters →
+Statement category → Select all results → Categorize & assign**. Use merchant
+groups and saved rules for the repeat work in later imports. Selection is limited
+to the current filtered results and the server accepts up to 5,000 rows per batch.
+
 ## Storage and backups
 
 The default data folder is `%LOCALAPPDATA%\LocalBookkeeper` on Windows, or
@@ -92,8 +130,9 @@ retiring your previous copy.
 
 ## Scope and privacy
 
-- CSV and XLSX import/review/export are implemented. PDF, OCR, saved manual column
-  mappings, automatic merchant rules, and a restore wizard remain future work.
+- CSV and XLSX import/review/export, bulk categorization and merchant suggestion
+  rules are implemented. PDF, OCR, saved manual column mappings, and a restore
+  wizard remain future work.
 - This is a single-user local app, not a hosted or network accounting service.
 - The web server serves only the interface assets and defined APIs. Project
   documents, source code and data directories are not served as static files.
@@ -123,3 +162,8 @@ The frontend and API share the local server. JSON endpoints include:
   `decision` (`duplicate` or `distinct`)
 - `GET /api/export.xlsx`, `/api/export.csv` — optional `businessId`, `year`
 - `GET /api/backup`
+- `POST /api/categorization/preview` and `/api/categorization/apply` — selected
+  `ids`, category/business, review/inclusion choices; apply requires the returned
+  preview `revision`.
+- `GET /api/suggestions`, `GET /api/rules`, `POST /api/rules/preview`,
+  `POST /api/rules` — local merchant rules and non-approving suggestions.

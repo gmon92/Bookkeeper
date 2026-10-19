@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from statement_import import parse_statement
 from reports import excel_report, safe_text
 from backup import create_backup
+import categorization
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local-bookkeeper")) / "LocalBookkeeper"
@@ -58,7 +59,7 @@ def connect():
 def initialize() -> None:
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     with connect() as db:
-        if db.execute('PRAGMA user_version').fetchone()[0] > 3:
+        if db.execute('PRAGMA user_version').fetchone()[0] > 4:
             raise RuntimeError('This database was created by a newer version of Local Bookkeeper.')
         db.executescript("""
         CREATE TABLE IF NOT EXISTS businesses (
@@ -148,7 +149,8 @@ def initialize() -> None:
               (NEW.include_in_totals=1 AND (NEW.excluded=1 OR NEW.amount_cents=0 OR lower(NEW.category_name) LIKE '%uncategorized%' OR
               NOT ((NEW.direction='debit' AND NEW.transaction_kind IN ('expense','fee')) OR (NEW.direction='credit' AND NEW.transaction_kind='refund'))))
             BEGIN SELECT RAISE(ABORT,'Transaction violates amount, review or reporting rules'); END''')
-        db.execute("PRAGMA user_version=3")
+        categorization.initialize(db)
+        db.execute("PRAGMA user_version=4")
 
 
 def utc_now() -> str:
@@ -297,6 +299,7 @@ def parse_csv(content: bytes, filename: str) -> dict:
 
 def transaction_json(row: sqlite3.Row) -> dict:
     raw = json.loads(row['source_raw_json'])
+    source_values = dict(zip((normalize_header(str(h)) for h in raw.get('headers',[])),raw.get('values',[])))
     return {
         "id": row["id"], "documentId": row["document_id"], "businessId": row["business_id"],
         "accountId": row["account_id"], "account": row["account_nickname"] + (f" ···· {row['last_four']}" if row["last_four"] else ""),
@@ -310,6 +313,7 @@ def transaction_json(row: sqlite3.Row) -> dict:
         "duplicateOf": row["duplicate_of"], "duplicateCandidate": row["duplicate_candidate"],
         "sourceRow": row["source_row"], "sourceFilename": row["source_filename"],
         "sourceSheet": raw.get('sheet'),
+        "sourceCategory": str(source_values.get('category') or source_values.get('transactioncategory') or ''),
         "notes": row["notes"], "fingerprint": row["source_fingerprint"],
     }
 
@@ -388,6 +392,12 @@ class Handler(SimpleHTTPRequestHandler):
         if path == '/api/review/actions':
             with connect() as db:
                 return self.send_json(200, [dict(r) for r in db.execute('SELECT * FROM review_actions ORDER BY rowid DESC LIMIT 100')])
+        if path == '/api/rules':
+            with connect() as db:
+                return self.send_json(200,categorization.rules(db))
+        if path == '/api/suggestions':
+            with connect() as db:
+                return self.send_json(200,categorization.suggestions(db))
         if path.endswith('/history') and path.startswith('/api/transactions/'):
             with connect() as db:
                 return self.send_json(200, [dict(r) for r in db.execute('SELECT * FROM transaction_history WHERE transaction_id=? ORDER BY rowid', (path.split('/')[3],))])
@@ -397,13 +407,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self.export_excel()
         if path == "/api/export.csv":
             return self.export_csv()
-        if path in {'/', '/index.html', '/app.js', '/styles.css'}:
+        if path in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css'}:
             return super().do_GET()
         return self.send_error(404)
 
     def do_HEAD(self):
         # SimpleHTTPRequestHandler otherwise allows HEAD to bypass GET's allowlist.
-        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css'}:
+        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css'}:
             return super().do_HEAD()
         return self.send_error(404)
 
@@ -412,6 +422,36 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(403, {'error': 'Requests must come from the local app.'})
         path = urlparse(self.path).path
         try:
+            if path in {'/api/categorization/preview','/api/categorization/apply'}:
+                body = self.read_json()
+                with connect() as db:
+                    if path.endswith('/apply'):
+                        db.execute('BEGIN IMMEDIATE')
+                        result = categorization.commit(db,body,self,utc_now())
+                    else:
+                        result = categorization.plan(db,body,self.validate_transaction)[0]
+                return self.send_json(200,result)
+            if path in {'/api/rules','/api/rules/preview'}:
+                body = self.read_json()
+                with connect() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    if path.endswith('/preview'):
+                        result = categorization.preview_rule(db,body)
+                    elif body.get('id') and set(body) <= {'id','active'}:
+                        if type(body.get('active')) is not bool: raise ValueError('Rule activation must be true or false.')
+                        if not db.execute('SELECT id FROM merchant_rules WHERE id=?',(body['id'],)).fetchone(): raise ValueError('Rule not found.')
+                        db.execute('UPDATE merchant_rules SET active=? WHERE id=?',(int(body['active']),body['id']))
+                        result = {'ok':True}
+                    else:
+                        rule = categorization.rule_values(db,body)
+                        rule_id = body.get('id') or str(uuid.uuid4())
+                        if body.get('id'):
+                            if not db.execute('SELECT id FROM merchant_rules WHERE id=?',(rule_id,)).fetchone(): raise ValueError('Rule not found.')
+                            db.execute('UPDATE merchant_rules SET pattern=?,account_id=?,business_id=?,category_name=? WHERE id=?',(rule['pattern'],rule['account_id'],rule['business_id'],rule['category_name'],rule_id))
+                        else:
+                            db.execute('INSERT INTO merchant_rules(id,pattern,account_id,business_id,category_name,created_at) VALUES(?,?,?,?,?,?)',(rule_id,rule['pattern'],rule['account_id'],rule['business_id'],rule['category_name'],utc_now()))
+                        result = {'id':rule_id,'ok':True}
+                return self.send_json(200,result)
             if path == "/api/imports/preview":
                 body = self.read_json()
                 filename = Path(str(body.get("filename", "statement.csv"))).name
@@ -617,7 +657,7 @@ class Handler(SimpleHTTPRequestHandler):
         return self.send_json(200, {"ok": True, 'actionId':action_id})
 
     @staticmethod
-    def validate_transaction(db, values):
+    def validate_transaction(db, values, check_category=True):
         if values['status'] not in {'needs_review','suggested','approved'}:
             raise ValueError('Choose a valid review status.')
         if type(values['amount_cents']) is not int or not 0 <= values['amount_cents'] <= 999999999999:
@@ -634,7 +674,7 @@ class Handler(SimpleHTTPRequestHandler):
             raise ValueError('Choose an active source account.')
         if values['business_id'] and not db.execute('SELECT id FROM businesses WHERE id=? AND active=1',(values['business_id'],)).fetchone():
             raise ValueError('Choose an active business.')
-        if values['classification'] == 'business' and not db.execute('SELECT id FROM categories WHERE active=1 AND name=? AND (business_id=? OR business_id IS NULL)',(values['category_name'],values['business_id'])).fetchone():
+        if check_category and values['classification'] == 'business' and not db.execute('SELECT id FROM categories WHERE active=1 AND name=? AND (business_id=? OR business_id IS NULL)',(values['category_name'],values['business_id'])).fetchone():
             raise ValueError('Choose a category belonging to this business.')
         if values['include_in_totals']:
             valid_kind = (values['direction'] == 'debit' and values['transaction_kind'] in {'expense','fee'}) or (values['direction'] == 'credit' and values['transaction_kind'] == 'refund')
