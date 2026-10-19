@@ -57,7 +57,7 @@ def validate_existing(directory):
             required = {'businesses','accounts','categories','documents','transactions','transaction_history','review_actions','review_action_items'}
             if application_id not in (0,APP_ID) or not required <= tables:
                 raise ValueError('This is not a Local Bookkeeper database. No changes were made.')
-            if db.execute('PRAGMA user_version').fetchone()[0] > 5:
+            if db.execute('PRAGMA user_version').fetchone()[0] > 6:
                 raise ValueError('These books need a newer version of the app.')
             if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
                 raise ValueError('The database needs recovery before it can be opened.')

@@ -10,7 +10,7 @@ def finish(parsed):
     extraction['parserVersion'] = parsed['parser_version']
     extraction['rowCount'] = len(parsed['rows'])
     extraction['rowSelection'] = 'Read nonempty rows after the detected header. Blank rows are skipped. Invalid amounts or dates are retained for review, not silently discarded.'
-    extraction['categoryPolicy'] = 'A statement category is source evidence. Imports do not assign an approved business category or include expenses in totals.'
+    extraction['categoryPolicy'] = 'Statement categories are retained in the database as original evidence and can automatically group transactions into review batches. Each batch can receive one business/category decision. Imports do not approve transactions or include expenses in totals.'
     if parsed['provider']=='American Express':
         extraction['amountPolicy'] = 'American Express layout: positive Amount values are card charges (debit); negative values are payments or credits (credit). Payment wording suggests a transfer; other credits require review.'
     elif 'amount' not in extraction['columns'] and ('debit' in extraction['columns'] or 'credit' in extraction['columns']):

@@ -24,6 +24,7 @@ from reports import excel_report, safe_text
 from backup import create_backup, restore_backup
 import categorization
 import workspace_store
+import source_archive
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local-bookkeeper")) / "LocalBookkeeper"
@@ -65,7 +66,7 @@ def connect():
 def initialize(initial_business=None) -> None:
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     with connect() as db:
-        if db.execute('PRAGMA user_version').fetchone()[0] > 5:
+        if db.execute('PRAGMA user_version').fetchone()[0] > 6:
             raise RuntimeError('This database was created by a newer version of Local Bookkeeper.')
         db.executescript("""
         CREATE TABLE IF NOT EXISTS businesses (
@@ -169,7 +170,8 @@ def initialize(initial_business=None) -> None:
         ''')
         db.execute("INSERT OR IGNORE INTO app_metadata VALUES('workspace_id',?)",(str(uuid.uuid4()),))
         db.execute(f'PRAGMA application_id={workspace_store.APP_ID}')
-        db.execute("PRAGMA user_version=5")
+        source_archive.initialize(db, now, DATA_DIR)
+        db.execute("PRAGMA user_version=6")
 
 
 def activate_workspace(directory, business=None, remember=False):
@@ -373,7 +375,7 @@ def parse_csv(content: bytes, filename: str) -> dict:
     if not result:
         raise ValueError("No monetary transaction rows could be parsed. Check the amount columns.")
     warnings["total"] = sum(warnings.values())
-    column_indexes = {'date':date_i,'postedDate':posted_i,'description':desc_i,'amount':amount_i,'debit':debit_i,'credit':credit_i,'type':type_i,'sourceCategory':find('category','transactioncategory')}
+    column_indexes = {'date':date_i,'postedDate':posted_i,'description':desc_i,'amount':amount_i,'debit':debit_i,'credit':credit_i,'type':type_i,'sourceCategory':find(*source_archive.CATEGORY_HEADERS)}
     columns = {key:{'index':index,'header':headers[index],
         'purpose':'Not used: Amount column takes priority.' if amount_i>=0 and key in {'debit','credit'} else
             'Retained as statement evidence, not an approved business category.' if key=='sourceCategory' else 'Read by the import adapter.'}
@@ -399,7 +401,7 @@ def transaction_json(row: sqlite3.Row) -> dict:
         "duplicateOf": row["duplicate_of"], "duplicateCandidate": row["duplicate_candidate"],
         "sourceRow": row["source_row"], "sourceFilename": row["source_filename"],
         "sourceSheet": raw.get('sheet'),
-        "sourceCategory": str(source_values.get('category') or source_values.get('transactioncategory') or ''),
+        "sourceCategory": row['original_source_category'] if 'original_source_category' in row.keys() and row['original_source_category'] is not None else source_archive.category(raw),
         "notes": row["notes"], "fingerprint": row["source_fingerprint"],
     }
 
@@ -464,6 +466,12 @@ class Handler(SimpleHTTPRequestHandler):
         if path == '/api/import-profiles':
             with connect() as db:
                 return self.send_json(200,[dict(r) for r in db.execute('SELECT p.id,p.provider,p.format,p.confirmed_at,a.nickname,a.last_four FROM import_profiles p JOIN accounts a ON a.id=p.account_id WHERE p.active=1 ORDER BY p.confirmed_at DESC')])
+        if path.startswith('/api/documents/') and path.endswith('/source'):
+            query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            offset = int(query.get('offset', ['0'])[0])
+            if offset < 0: raise ValueError('Choose a nonnegative source row offset.')
+            with connect() as db:
+                return self.send_json(200, source_archive.document_rows(db, path.split('/')[3], query.get('sheet', [None])[0], offset))
         if path.endswith('/explanation') and path.startswith('/api/transactions/'):
             return self.explain_transaction(path.split('/')[3])
         if path == "/api/businesses":
@@ -477,9 +485,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, [dict(r) for r in db.execute("SELECT id,business_id,name,tax_group,requires_review FROM categories WHERE active=1 ORDER BY name")])
         if path == "/api/transactions":
             with connect() as db:
-                rows = db.execute("""SELECT t.*,a.nickname AS account_nickname,a.last_four,d.filename AS source_filename,
+                rows = db.execute("""SELECT t.*,a.nickname AS account_nickname,a.last_four,d.filename AS source_filename,o.source_category AS original_source_category,
                     (SELECT t2.id FROM transactions t2 WHERE t2.id <> t.id AND t2.account_id=t.account_id AND t2.source_fingerprint=t.source_fingerprint AND NOT EXISTS (SELECT 1 FROM duplicate_decisions dd WHERE dd.decision='distinct' AND ((dd.first_id=t.id AND dd.second_id=t2.id) OR (dd.first_id=t2.id AND dd.second_id=t.id))) ORDER BY t2.created_at LIMIT 1) AS duplicate_candidate
-                    FROM transactions t JOIN accounts a ON a.id=t.account_id LEFT JOIN documents d ON d.id=t.document_id
+                    FROM transactions t JOIN accounts a ON a.id=t.account_id LEFT JOIN documents d ON d.id=t.document_id LEFT JOIN original_transactions o ON o.transaction_id=t.id
                     ORDER BY t.date DESC,t.created_at DESC""").fetchall()
                 return self.send_json(200, [transaction_json(r) for r in rows])
         if path == "/api/documents":
@@ -504,13 +512,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self.export_excel()
         if path == "/api/export.csv":
             return self.export_csv()
-        if path in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css'}:
+        if path in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css'}:
             return super().do_GET()
         return self.send_error(404)
 
     def do_HEAD(self):
         # SimpleHTTPRequestHandler otherwise allows HEAD to bypass GET's allowlist.
-        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css'}:
+        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css'}:
             return super().do_HEAD()
         return self.send_error(404)
 
@@ -599,6 +607,7 @@ class Handler(SimpleHTTPRequestHandler):
                     "headers": parsed["headers"], "warnings": parsed["warnings"],
                     "provider": parsed['provider'], "reconciliation": parsed['reconciliation'], "requiresMappingConfirmation": parsed['provider'] == 'American Express',
                     'extraction':parsed['extraction'],'rememberedLayouts':profiles,
+                    'sourceCategoryGroups': source_archive.category_groups(parsed),
                     "rows": [{"date":r["date"],"description":r["description"],"amountCents":r["amount_cents"],"sourceAmountCents":r["source_amount_cents"],"direction":r["direction"],"sourceRow":r["source_row"],'evidence':r['raw']['evidence'],'kind':r['transaction_kind']} for r in parsed["rows"][:20]]})
             if path == "/api/imports/commit":
                 return self.commit_import()
@@ -626,7 +635,8 @@ class Handler(SimpleHTTPRequestHandler):
         with connect() as db:
             row = db.execute('SELECT t.*,d.filename,d.provider,d.metadata_json FROM transactions t LEFT JOIN documents d ON d.id=t.document_id WHERE t.id=?',(transaction_id,)).fetchone()
             if not row: return self.send_json(404,{'error':'Transaction not found.'})
-            raw = json.loads(row['source_raw_json'])
+            baseline = source_archive.original(db, transaction_id)
+            raw = baseline['raw'] if baseline else json.loads(row['source_raw_json'])
             history = db.execute('''SELECT h.reason,h.changed_at,h.action,a.description FROM transaction_history h
                 LEFT JOIN review_actions a ON a.id=h.action_id WHERE h.transaction_id=?
                 AND h.field_name IN ('category','category_name') ORDER BY h.rowid DESC LIMIT 1''',(transaction_id,)).fetchone()
@@ -637,7 +647,8 @@ class Handler(SimpleHTTPRequestHandler):
             result = {'source':{'filename':row['filename'],'provider':row['provider'],'row':row['source_row'],'sheet':raw.get('sheet')},
                 'importEvidence':raw.get('evidence'),'extraction':json.loads(row['metadata_json'] or '{}').get('extraction'),
                 'sourceColumns':[{'header':str(h),'value':str(v)} for h,v in zip(raw.get('headers',[]),raw.get('values',[])) if str(h).strip()],
-                'current':{'date':row['date'],'amountCents':row['amount_cents'],'direction':row['direction'],'kind':row['transaction_kind'],
+                'original': baseline,
+                'current':{'date':row['date'],'postedDate':row['posted_date'],'description':row['description'],'merchant':row['merchant'],'amountCents':row['amount_cents'],'direction':row['direction'],'kind':row['transaction_kind'],
                     'category':row['category_name'],'classification':row['classification'],'includeInTotals':bool(row['include_in_totals'])},
                 'categoryReason':category_reason,'categoryDecidedAt':history['changed_at'] if history else None,'suggestion':value}
         return self.send_json(200,result)
@@ -663,6 +674,7 @@ class Handler(SimpleHTTPRequestHandler):
             if existing and body.get('allowDuplicate') is not True:
                 raise ValueError('This exact document is already imported. Explicitly confirm re-import to retain another copy for review.')
             document_id, now = str(uuid.uuid4()), utc_now()
+            archive = source_archive.capture(staged['content'], parsed['filename'])
             target = DOCS_DIR / (document_id + Path(parsed['filename']).suffix.lower())
             # Write before committing database references. A failed DB transaction
             # removes this new file; originals belonging to previous imports stay intact.
@@ -675,6 +687,7 @@ class Handler(SimpleHTTPRequestHandler):
                 dates = [r['date'] for r in parsed['rows'] if parse_date(r['date'])]
                 db.execute('INSERT INTO documents(id,filename,file_hash,stored_path,provider,format,statement_start,statement_end,imported_at,default_classification,parser_version,metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
                     (document_id, parsed['filename'], staged['file_hash'], target.relative_to(DATA_DIR).as_posix(), parsed['provider'], parsed['format'], min(dates) if dates else None, max(dates) if dates else None, now, 'unknown', parsed['parser_version'], json.dumps(metadata)))
+                source_archive.save_document(db, document_id, staged['file_hash'], archive, now)
                 inserted = []
                 for tx in parsed['rows']:
                     tx_id = str(uuid.uuid4())
@@ -682,6 +695,10 @@ class Handler(SimpleHTTPRequestHandler):
                     db.execute('''INSERT INTO transactions(id,document_id,account_id,date,posted_date,description,merchant,raw_amount_text,source_amount_cents,amount_cents,direction,transaction_kind,source_fingerprint,classification,category_name,status,source_row,source_raw_json,created_at,updated_at)
                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                         (tx_id,document_id,account_id,tx['date'],tx['posted_date'],tx['description'],tx['merchant'],tx['raw_amount_text'],tx['source_amount_cents'],tx['amount_cents'],tx['direction'],tx['transaction_kind'],tx['fingerprint'],'unknown',tx['category_name'],'needs_review',tx['source_row'],json.dumps(tx['raw']),now,now))
+                    baseline = {'date':tx['date'],'postedDate':tx['posted_date'],'description':tx['description'],
+                        'merchant':tx['merchant'],'amountCents':tx['amount_cents'],'direction':tx['direction'],
+                        'kind':tx['transaction_kind'],'category':tx['category_name'],'classification':'unknown','includeInTotals':False}
+                    source_archive.save_transaction(db, tx_id, document_id, tx['raw'], tx['source_row'], now, baseline, parsed['extraction'])
                     inserted.append({'id':tx_id, 'duplicateCandidate':possible['id'] if possible else None})
                 db.execute('DELETE FROM staged_imports WHERE token=?', (body['token'],))
                 if body.get('rememberLayout') is True:

@@ -68,6 +68,17 @@ folder picker is available; enter the absolute path if the picker is unavailable
    Refunds reduce expense totals. Source accounts, documents and rows remain
    traceable. CSV remains available at `/api/export.csv` with the same filters.
 
+Every new import also stores an immutable source archive in SQLite. CSV records
+and cell values from every XLSX worksheet are kept in separate source tables,
+alongside each transaction's original import values. **Imports → Original data**
+opens the stored rows even if the uploaded file is later unavailable. The
+transaction detail panel compares the original normalized values with the
+current editable values and highlights changes. Existing books are upgraded
+from retained source evidence; if a matching original file is still present,
+the migration also archives its full cell data. Otherwise the archive clearly
+reports that it covers imported transaction rows only. Spreadsheet formatting
+and images remain in the retained file.
+
 Reports assist bookkeeping and tax preparation; inclusion is not a determination
 of tax deductibility. Unassigned activity on personal/shared source accounts is
 shown in All activity/Personal until assigned to a business.
@@ -91,6 +102,12 @@ shown in All activity/Personal until assigned to a business.
   The count always reflects the current filters. The dialog lists every affected
   transaction, provides a category dropdown with a custom category option, and
   previews the batch before **Apply to all** saves it.
+- **Statement category groups** batches every transaction by the category
+  description in its original statement, including matching transactions across
+  merchants and accounts. Blank source categories form a separate group. The
+  import preview can remember an option to open these groups after each import;
+  each batch can receive one business/category decision. This uses the statement
+  label as a suggested category, which can be changed before applying.
 - Select rows, a merchant group or all filtered results, then **Categorize &
   assign** (keyboard: `C`). Choose a business and category, optionally create a
   custom category, then preview the exact changes before saving. Keep current

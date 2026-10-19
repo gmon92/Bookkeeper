@@ -72,12 +72,12 @@ def parse_xlsx(content, filename, csv_parser):
         for tx, source_row in zip(parsed['rows'], source_rows):
             tx['source_row'] = source_row
             tx['raw']['sheet'] = sheet.title
-        parsed.update(format='xlsx', provider='Generic spreadsheet', parser_version='xlsx-v2', reconciliation=None)
+        parsed.update(format='xlsx', provider='Generic spreadsheet', parser_version='xlsx-v3', reconciliation=None)
         # A specific provider layout supplies a sign convention; the preview asks
         # the user to confirm it before any rows are committed.
         amex = sheet.title == 'Transaction Details' and {'Extended Details', 'Appears On Your Statement As', 'Reference', 'Category'} <= set(headers)
         if amex:
-            parsed.update(provider='American Express', parser_version='amex-xlsx-v2')
+            parsed.update(provider='American Express', parser_version='amex-xlsx-v3')
             for tx in parsed['rows']:
                 tx['direction'] = 'credit' if tx['source_amount_cents'] < 0 else 'debit'
                 description = tx['description'].upper()
@@ -107,6 +107,6 @@ def parse_statement(content, filename, csv_parser):
         return parse_xlsx(content, filename, csv_parser)
     if suffix == '.csv':
         parsed = csv_parser(content, filename)
-        parsed.update(format='csv', provider='Generic CSV', parser_version='csv-v3', reconciliation=None)
+        parsed.update(format='csv', provider='Generic CSV', parser_version='csv-v4', reconciliation=None)
         return finish(parsed)
     raise ValueError("Choose a CSV or XLSX statement. PDF and legacy XLS files are not supported yet.")
