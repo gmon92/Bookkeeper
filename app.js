@@ -136,10 +136,12 @@ function renderReports() {
 }
 function renderSettings() {
   return heading('A place for everything.', 'Your local storage, businesses, and app information.', '', 'DATA & STORAGE') +
-    '<div class="settings-grid"><section class="panel settings-panel"><h2>Saved on this computer</h2><span class="status ' + (state.connected?'':'review') + '"><i></i>' + (state.connected?'Connected to your local database':'Local server is not connected') + '</span><p>Database</p><code>' + e(state.health?.database || 'Start the local app to view its database location.') + '</code><p>Original statements & app data</p><code>' + e(state.health?.dataDirectory || 'Available when the local server is running.') + '</code><h2>A copy for safekeeping</h2><p>Download a consistent copy of the database and retained originals. Store the ZIP somewhere safe. Restore instructions are in the README.</p><button class="button button-secondary" data-action="backup">Download backup</button><h2>Recent review actions</h2><div id="recent-actions">Open settings to view review history.</div></section><section class="panel settings-panel"><h2>Your business workspaces</h2><p>Each business has its own categories. Accounts and transactions keep their source identity.</p><ul class="settings-list">' + state.businesses.map(b=>'<li>' + icon('business') + '<span>' + e(b.legal_name) + '</span></li>').join('') + '</ul><button class="text-button" data-action="add-business" style="margin-top:10px">Add a business ' + icon('plus') + '</button><div class="info-strip" style="margin-top:28px">' + icon('shield') + '<p>All normal processing happens on this device. No bank sign-in or cloud service is required.</p></div></section></div>';
+    '<div class="settings-grid"><section class="panel settings-panel"><h2>Saved on this computer</h2><span class="status ' + (state.connected?'':'review') + '"><i></i>' + (state.connected?'Connected to your local database':'Local server is not connected') + '</span><p>Database</p><code>' + e(state.health?.database || 'Start the local app to view its database location.') + '</code><p>Original statements & app data</p><code>' + e(state.health?.dataDirectory || 'Available when the local server is running.') + '</code><button class="button button-secondary" style="margin-top:16px" data-action="choose-database">Choose or move books</button><h2>A copy for safekeeping</h2><p>Download a consistent copy of the database and retained originals. Store the ZIP somewhere safe. Restore instructions are in the README.</p><button class="button button-secondary" data-action="backup">Download backup</button>' + renderConfirmedLayouts() + '<h2>Recent review actions</h2><div id="recent-actions">Open settings to view review history.</div></section><section class="panel settings-panel"><h2>Your business workspaces</h2><p>Each business has its own categories. Accounts and transactions keep their source identity.</p><ul class="settings-list">' + state.businesses.map(b=>'<li>' + icon('business') + '<span>' + e(b.legal_name) + '</span></li>').join('') + '</ul><button class="text-button" data-action="add-business" style="margin-top:10px">Add a business ' + icon('plus') + '</button><div class="info-strip" style="margin-top:28px">' + icon('shield') + '<p>All normal processing happens on this device. No bank sign-in or cloud service is required.</p></div></section></div>';
 }
 
 function render() {
+  if(state.setupRequired||state.setupEditing){renderBooksSetup();return;}
+  setupGate(false);
   const renderers={overview:renderOverview,review:renderLedger,transactions:renderLedger,imports:renderImports,accounts:renderAccounts,reports:renderReports,settings:renderSettings};
   $('#page').innerHTML=(renderers[state.page]||renderOverview)();
   $('#breadcrumb').textContent=pageNames[state.page];
@@ -156,13 +158,14 @@ function navigate(page) { if(location.hash==='#'+page){state.page=page;render();
 function toast(message) { $('#toast-message').textContent=message;$('#toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').hidden=true,5000); }
 async function api(path,options={}) {
   if(location.protocol==='file:') throw new Error('Open the app at http://127.0.0.1:8765 to use your database.');
-  const response=await fetch(path,{signal:AbortSignal.timeout(10000),...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});
+  const response=await fetch(path,{signal:AbortSignal.timeout(10000),...options,headers:{'Content-Type':'application/json',...(state.health?.workspaceId?{'X-Bookkeeper-Workspace':state.health.workspaceId}:{}),...(options.headers||{})}});
   const contentType=response.headers.get('content-type')||'';
   if(!contentType.includes('application/json')) throw new Error('The local app server is not responding.');
   const payload=await response.json();if(!response.ok)throw new Error(payload.error||'The request could not be completed.');return payload;
 }
 function post(path,body,method='POST') { return api(path,{method,body:JSON.stringify(body)}); }
 function connectionUI(error) {
+  if(state.setupRequired){$('#connection-banner').hidden=true;return;}
   const status=$('#connection-status');status.className='connection-status '+(state.connected?'connected':'disconnected');status.innerHTML='<i></i>'+(state.connected?'On this device':'Server offline');
   const banner=$('#connection-banner');banner.hidden=state.connected;
   if(!state.connected)banner.innerHTML=icon('warning')+'<div><strong>'+(location.protocol==='file:'?'Open your local workspace.':'Your books are safe. The local server is offline.')+'</strong><p>'+(location.protocol==='file:'?'This file is a preview. Start <code>run_local_bookkeeper.bat</code>, then open the app at its local address.':'Start <code>run_local_bookkeeper.bat</code> and refresh to reconnect to your books.')+'</p></div>'+(location.protocol==='file:'?'<a class="button button-secondary button-small" href="http://127.0.0.1:8765">Open local app '+icon('arrow-right')+'</a>':'<button class="button button-secondary button-small" data-action="refresh">Try again '+icon('refresh')+'</button>');
@@ -171,8 +174,10 @@ function connectionUI(error) {
 async function loadData({quiet=false}={}) {
   $('#refresh-button').classList.add('is-busy');
   try {
-    const [health,transactions,accounts,businesses,categories,documents,rules,suggestions]=await Promise.all(['/api/health','/api/transactions','/api/accounts','/api/businesses','/api/categories','/api/documents','/api/rules','/api/suggestions'].map(path=>api(path)));
-    Object.assign(state,{health,transactions,accounts,businesses,categories,documents,rules,suggestions,connected:true,ready:true});
+    const health=await api('/api/health');state.health=health;
+    if(health.setupRequired){Object.assign(state,{setupRequired:true,connected:false,ready:true,transactions:[],accounts:[],businesses:[],categories:[],documents:[],rules:[],suggestions:{},importProfiles:[]});booksSetup.info=health.setup;render();return;}
+    const [transactions,accounts,businesses,categories,documents,rules,suggestions,importProfiles]=await Promise.all(['/api/transactions','/api/accounts','/api/businesses','/api/categories','/api/documents','/api/rules','/api/suggestions','/api/import-profiles'].map(path=>api(path)));
+    Object.assign(state,{health,transactions,accounts,businesses,categories,documents,rules,suggestions,importProfiles,setupRequired:false,connected:true,ready:true});
     if(!['all','personal',...businesses.map(b=>b.id)].includes(state.workspace))state.workspace='all';
     populateWorkspaces();connectionUI();render();if(!quiet)toast('Your books are up to date.');
   } catch(error) {state.connected=false;state.ready=true;connectionUI(error);render();if(!quiet&&location.protocol!=='file:')toast(error.message);}
@@ -211,15 +216,17 @@ function openImportPreview() {
   if(p.alreadyImported)warnings.push('<strong>This exact file is already in your library.</strong> Importing again will add another set of rows for duplicate review.');
   if(p.warnings.total)warnings.push(e(p.warnings.total)+' parsing warning'+(p.warnings.total===1?'':'s')+'. Check dates, amounts, and descriptions before including these rows in totals.');
   if(p.possibleDuplicates)warnings.push(e(p.possibleDuplicates)+' rows may match existing activity.');
-  $('#import-warning').innerHTML=warnings.map(text=>'<div class="callout">'+icon('warning')+'<p>'+text+'</p></div>').join('');
+  $('#import-warning').innerHTML=warnings.map(text=>'<div class="callout">'+icon('warning')+'<p>'+text+'</p></div>').join('')+importExplanationMarkup(p);
   $('#import-metrics').innerHTML=[['Rows extracted',p.rowCount],['Money out',money(p.debitCents)],['Money in',money(p.creditCents)],['Warnings',p.warnings.total]].map(([label,value])=>'<div class="import-metric"><span>'+label+'</span><strong>'+value+'</strong></div>').join('');
-  $('#import-preview').innerHTML='<table><thead><tr><th>Source row</th><th>Date</th><th>Description</th><th style="text-align:right">Amount</th></tr></thead><tbody>'+p.rows.map(t=>'<tr><td>'+t.sourceRow+'</td><td>'+e(t.date||'Needs review')+'</td><td>'+e(t.description)+'</td><td class="amount">'+(t.direction==='unknown'?'? ':t.direction==='credit'?'+ ':'− ')+money(t.amountCents)+'</td></tr>').join('')+'</tbody></table>';
+  $('#import-preview').innerHTML='<table><thead><tr><th>Source row</th><th>Date</th><th>Description</th><th style="text-align:right">Amount</th></tr></thead><tbody>'+p.rows.map(t=>'<tr><td>'+t.sourceRow+'</td><td>'+e(t.date||'Needs review')+'</td><td>'+e(t.description)+importRowReason(t)+'</td><td class="amount">'+(t.direction==='unknown'?'? ':t.direction==='credit'?'+ ':'− ')+money(t.amountCents)+'</td></tr>').join('')+'</tbody></table>';
   $('#import-account').innerHTML='<option value="">Choose the source account…</option>'+accountOptions();
-  $('#mapping-confirmation').hidden=!p.requiresMappingConfirmation;
-  $('#mapping-confirm').required=!!p.requiresMappingConfirmation;$('#mapping-confirm').checked=false;
+  $('#mapping-confirmation').hidden=false;
+  $('#mapping-confirm').required=true;$('#mapping-confirm').checked=false;
+  $('#mapping-confirm-label').textContent='I confirm the source columns, selected rows and amount interpretation shown above.';
   $('#duplicate-confirmation').hidden=!p.alreadyImported;
   $('#duplicate-confirm').required=!!p.alreadyImported;$('#duplicate-confirm').checked=false;
   showDialog('import-dialog');
+  updateLayoutMemory();
 }
 
 function setCategories(businessId,selected='') {
@@ -254,6 +261,7 @@ function openEditor(id) {
   }
   $('#transaction-history').textContent='Loading history…';
   api('/api/transactions/'+encodeURIComponent(id)+'/history').then(rows=>{if(form.elements.id.value!==id)return;$('#transaction-history').innerHTML=rows.length?rows.map(r=>'<p><strong>'+e(r.action)+' · '+e(r.field_name)+'</strong><br>'+e(r.old_value)+' → '+e(r.new_value)+'<br><small>'+e(formatDate(r.changed_at))+'</small></p>').join(''):'No review changes yet.';}).catch(error=>{$('#transaction-history').textContent=error.message;});
+  loadTransactionExplanation(id);
   showDialog('transaction-dialog');
 }
 function openBatch(action) {
@@ -316,7 +324,7 @@ $('#business-form').addEventListener('submit',async event=>{
 });
 $('#import-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget;if(!state.preview)return;busy(form,true);
-  try{const saved=await post('/api/imports/commit',{token:state.preview.token,accountId:$('#import-account').value,confirmMapping:$('#mapping-confirm').checked,allowDuplicate:$('#duplicate-confirm').checked});state.preview=null;$('#import-dialog').close();await loadData({quiet:true});state.workspace='all';try{localStorage.setItem('bookkeeper.workspace','all');}catch{}$('#workspace-select').value='all';state.year='all';state.document=saved.documentId;state.query='';state.account='';navigate('review');toast(saved.rowCount+' transactions imported for review.');}catch(error){showError(form,error);}finally{busy(form,false);}
+  try{const saved=await post('/api/imports/commit',{token:state.preview.token,accountId:$('#import-account').value,confirmMapping:$('#mapping-confirm').checked,confirmExtraction:$('#mapping-confirm').checked,rememberLayout:$('#remember-import-layout').checked,allowDuplicate:$('#duplicate-confirm').checked});state.preview=null;$('#import-dialog').close();await loadData({quiet:true});state.workspace='all';try{localStorage.setItem('bookkeeper.workspace','all');}catch{}$('#workspace-select').value='all';state.year='all';state.document=saved.documentId;state.query='';state.account='';navigate('review');toast(saved.rowCount+' transactions imported for review.');}catch(error){showError(form,error);}finally{busy(form,false);}
 });
 $('#transaction-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget;busy(form,true);

@@ -8,6 +8,7 @@ import io
 from decimal import Decimal
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
+from import_evidence import finish
 
 MAX_ROWS = 50000
 
@@ -54,25 +55,29 @@ def parse_xlsx(content, filename, csv_parser):
         writer = csv.writer(output)
         writer.writerow(headers)
         source_rows = []
+        blank_rows = 0
         for number, row in enumerate(sheet.iter_rows(min_row=header_row + 1), header_row + 1):
             if len(source_rows) >= MAX_ROWS:
                 raise ValueError("Too many transaction rows.")
             if not any(cell.value is not None for cell in row):
+                blank_rows += 1
                 continue
             if any(cell.data_type == 'f' for cell in row):
                 raise ValueError(f"Formula in transaction sheet {sheet.title}, row {number}. Export values only before importing.")
             writer.writerow([cell_text(cell.value) for cell in row])
             source_rows.append(number)
         parsed = csv_parser(output.getvalue().encode('utf-8'), filename)
+        parsed['extraction'].update(headerRow=header_row,sheet=sheet.title,metadataRowsSkipped=header_row-1,
+            blankRowsSkipped=blank_rows,otherSheets=[s.title for s in workbook if s.title!=sheet.title])
         for tx, source_row in zip(parsed['rows'], source_rows):
             tx['source_row'] = source_row
             tx['raw']['sheet'] = sheet.title
-        parsed.update(format='xlsx', provider='Generic spreadsheet', parser_version='xlsx-v1', reconciliation=None)
+        parsed.update(format='xlsx', provider='Generic spreadsheet', parser_version='xlsx-v2', reconciliation=None)
         # A specific provider layout supplies a sign convention; the preview asks
         # the user to confirm it before any rows are committed.
         amex = sheet.title == 'Transaction Details' and {'Extended Details', 'Appears On Your Statement As', 'Reference', 'Category'} <= set(headers)
         if amex:
-            parsed.update(provider='American Express', parser_version='amex-xlsx-v1')
+            parsed.update(provider='American Express', parser_version='amex-xlsx-v2')
             for tx in parsed['rows']:
                 tx['direction'] = 'credit' if tx['source_amount_cents'] < 0 else 'debit'
                 description = tx['description'].upper()
@@ -91,7 +96,7 @@ def parse_xlsx(content, filename, csv_parser):
                     parsed['reconciliation'] = {'matched': all(actual[k] == v for k, v in expected.items()), 'expectedCents': expected, 'actualCents': actual, 'sheet': 'Transaction Summary'}
                     if not parsed['reconciliation']['matched']:
                         raise ValueError("Extracted amounts do not match the workbook summary. Import stopped; check the source file.")
-        return parsed
+        return finish(parsed)
     finally:
         workbook.close()
 
@@ -102,6 +107,6 @@ def parse_statement(content, filename, csv_parser):
         return parse_xlsx(content, filename, csv_parser)
     if suffix == '.csv':
         parsed = csv_parser(content, filename)
-        parsed.update(format='csv', provider='Generic CSV', parser_version='csv-v2', reconciliation=None)
-        return parsed
+        parsed.update(format='csv', provider='Generic CSV', parser_version='csv-v3', reconciliation=None)
+        return finish(parsed)
     raise ValueError("Choose a CSV or XLSX statement. PDF and legacy XLS files are not supported yet.")

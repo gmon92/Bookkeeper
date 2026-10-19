@@ -6,6 +6,7 @@ import json
 import re
 import unicodedata
 import uuid
+from decimal import Decimal
 
 FIELDS = ('category_id','category_name','classification','business_id','status','include_in_totals','excluded')
 
@@ -83,7 +84,9 @@ def preview_rule(db, body):
     rule = rule_values(db,body)
     rows = [row for row in db.execute('SELECT * FROM transactions ORDER BY date DESC,id') if matching_rules(row,[rule])]
     return {'count':len(rows),'amountCents':sum(r['amount_cents'] for r in rows),
-            'rows':[{'id':r['id'],'date':r['date'],'description':r['description'],'amountCents':r['amount_cents'],'category':r['category_name']} for r in rows[:30]]}
+            'rows':[{'id':r['id'],'date':r['date'],'description':r['description'],'amountCents':r['amount_cents'],'category':r['category_name'],
+                     'rawAmount':r['raw_amount_text'],'direction':r['direction'],'sourceRow':r['source_row'],
+                     'reason':'Description contains “'+rule['pattern']+'”; '+('source account matches the rule.' if rule['account_id'] else 'the rule explicitly covers all source accounts.')} for r in rows[:30]]}
 
 
 def selected_rows(db, body):
@@ -115,6 +118,7 @@ def plan(db, body, validate):
     if target and not db.execute('SELECT id FROM businesses WHERE active=1 AND id=?',(target,)).fetchone():
         raise ValueError('Choose an active business.')
     all_rules, changes, exceptions, creates = rules(db), [], [], set()
+    selected_total = format(Decimal(sum(r['amount_cents'] for r in rows))/100,'.2f')
     for row in rows:
         try:
             if row['duplicate_of'] or row['classification']=='transfer' or row['transaction_kind']=='transfer':
@@ -148,7 +152,8 @@ def plan(db, body, validate):
                 validate(db,candidate,check_category=bool(cat))
             changes.append({'id':row['id'],'date':row['date'],'description':row['description'],'amountCents':row['amount_cents'],
                             'accountId':row['account_id'],'old':{key:row[key] for key in FIELDS},'new':new,
-                            'reason':match['reason']+'; rule IDs: '+', '.join(match['ruleIds']) if mode=='suggestions' else 'Explicit bulk categorization',
+                            'reason':match['reason']+'; rule IDs: '+', '.join(match['ruleIds']) if mode=='suggestions' else
+                                'You assigned '+str(len(rows))+' selected transactions to “'+new['category_name']+'” in one batch. Combined selected activity: '+selected_total+' USD. '+('Explicitly reviewed and included in totals.' if include else 'Explicitly reviewed, outside totals.' if reviewed else 'Saved for review, outside totals.'),
                             'version':dict(row) | {'_history_revision':db.execute('SELECT coalesce(max(rowid),0) FROM transaction_history WHERE transaction_id=?',(row['id'],)).fetchone()[0]}})
         except ValueError as exc:
             exceptions.append({'id':row['id'],'description':row['description'],'reason':str(exc)})

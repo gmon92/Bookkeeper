@@ -20,7 +20,8 @@ def create_backup(database_path, data_directory):
         copy = Path(directory) / 'bookkeeper.sqlite3'
         with closing(sqlite3.connect(database_path)) as source, closing(sqlite3.connect(copy)) as destination:
             source.backup(destination)
-            destination.execute('DELETE FROM staged_imports')
+            if destination.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='staged_imports'").fetchone():
+                destination.execute('DELETE FROM staged_imports')
             destination.commit()
             paths = [r[0] for r in destination.execute('SELECT stored_path FROM documents')]
         manifest = {'version':1,'files':{},'missingSources':[]}
@@ -41,9 +42,9 @@ def create_backup(database_path, data_directory):
     return result.getvalue()
 
 
-def restore_backup(archive_path, target_directory):
+def restore_backup(archive_path, target_directory, allow_empty=False):
     target = Path(target_directory).resolve()
-    if target.exists():
+    if target.exists() and (not allow_empty or not target.is_dir() or any(target.iterdir())):
         raise ValueError('Restore requires a new directory. Existing books are never overwritten.')
     with ZipFile(archive_path) as archive:
         if sum(i.file_size for i in archive.infolist()) > 2 * 1024**3:
@@ -69,6 +70,7 @@ def restore_backup(archive_path, target_directory):
             with closing(sqlite3.connect(staging/'bookkeeper.sqlite3')) as db:
                 if db.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or db.execute('PRAGMA foreign_key_check').fetchone():
                     raise ValueError('Restored database integrity check failed.')
+            if target.exists(): target.rmdir()  # Only an empty, explicitly chosen destination can reach this point.
             staging.rename(target)
     return manifest
 

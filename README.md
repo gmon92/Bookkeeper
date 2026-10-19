@@ -18,6 +18,22 @@ Open <http://127.0.0.1:8765/>. Keep the terminal open; Ctrl+C stops the server.
 Installation needs internet access once. The application works offline after
 dependencies are installed. The launcher uses `.venv` when present.
 
+On first run, the app asks where your books should live:
+
+- **Create new books:** choose a new or empty local folder outside the app folder
+  and enter your first business name. No business belonging to the developer or
+  another user is seeded.
+- **Open existing books:** choose a folder containing `bookkeeper.sqlite3` and
+  its retained `documents/` directory. Legacy books are preserved and upgraded.
+- **Copy existing books:** choose the source and a new or empty destination
+  outside the app folder. A consistent copy of the database and retained originals
+  is created; the source stays in place. Missing originals must be recovered
+  before copying.
+
+Use **Data & storage → Choose or move books** to choose another database later.
+The app remembers the selected folder for the current computer user. A native
+folder picker is available; enter the absolute path if the picker is unavailable.
+
 ## Import → review → report
 
 1. Add a source account using a nickname and optional last four digits. An
@@ -96,20 +112,25 @@ to the current filtered results and the server accepts up to 5,000 rows per batc
 
 ## Storage and backups
 
-The default data folder is `%LOCALAPPDATA%\LocalBookkeeper` on Windows, or
-`~/.local-bookkeeper/LocalBookkeeper` elsewhere. It contains `bookkeeper.sqlite3`
-and managed original statements in `documents/`. SQLite is authoritative;
+Your chosen books folder contains `bookkeeper.sqlite3` and managed originals in
+`documents/`. Keep that folder together; it is independent of the installed app.
+The suggested new location is `Documents\Local Bookkeeper Books` (or a folder
+under your home directory when Documents is unavailable). SQLite is authoritative;
 originals are copied before their database references are committed. Import
 previews persist for 30 minutes and can be committed once. Schema upgrades are
 additive and preserve existing books.
 
-Set `LOCAL_BOOKKEEPER_DATA` to use another directory, and
-`LOCAL_BOOKKEEPER_PORT` to change the port:
+Only the selected location is remembered in
+`%LOCALAPPDATA%\LocalBookkeeper\settings.json` on Windows, or
+`~/.config/LocalBookkeeper/settings.json` elsewhere. An unavailable saved location
+returns to setup instead of creating an empty replacement. `LOCAL_BOOKKEEPER_CONFIG`
+can override this preference-file path. `LOCAL_BOOKKEEPER_DATA` is recognized as a
+legacy location to offer during setup; saved user preferences take precedence.
+`LOCAL_BOOKKEEPER_PORT` changes the local HTTP port.
 
-```powershell
-$env:LOCAL_BOOKKEEPER_DATA='C:\MyBooks'
-.\run_local_bookkeeper.bat
-```
+No financial data or absolute personal location is stored in the source repository.
+Switching books is serialized with database requests. Write requests identify the
+active workspace, so a stale browser page cannot save into newly selected books.
 
 **Data & storage → Download backup** creates a ZIP containing a consistent SQLite
 snapshot, its retained originals and a SHA-256 manifest. Pending previews are
@@ -120,13 +141,37 @@ Restore into a **new** directory; existing books are never overwritten:
 ```powershell
 # Stop the app first.
 .\.venv\Scripts\python.exe backup.py restore C:\Backups\bookkeeper-backup.zip C:\RestoredBooks
-$env:LOCAL_BOOKKEEPER_DATA='C:\RestoredBooks'
 .\run_local_bookkeeper.bat
 ```
+
+Then choose **Open existing books** and select `C:\RestoredBooks` in the app.
 
 Restore validates checksums, safe paths, SQLite integrity and foreign keys before
 making the restored directory available. Verify the restored books before
 retiring your previous copy.
+
+## Import and category explanations
+
+- The import preview shows **How this statement was read**: detected provider,
+  parser version, worksheet, header row, exact source-column map, skipped rows,
+  amount/direction convention and date interpretation.
+- **Why these values?** under each previewed transaction explains the original
+  date and amount, source cents, normalized cents, direction and transaction kind.
+  Bank categories remain source evidence, not approved business categories.
+- Confirm the extraction before committing. Optionally remember the exact layout
+  for the selected source account. Future matching layouts show the prior
+  confirmation date; changed columns, adapter version or sheet are a different
+  layout. Every import still needs confirmation and remains outside totals.
+- **Data & storage → Confirmed import layouts** lets you revoke remembered
+  layouts. Remembering a layout never approves transactions or trusts a different
+  source account automatically.
+- The transaction drawer shows **Why these values and this category?**, including
+  original source values and the recorded category decision. Bulk decisions show
+  their row count and selected activity total; rule previews show each match's
+  phrase, account scope, source row, original amount and movement.
+- Older imports without detailed saved evidence are labeled as such. The app
+  does not invent a historical explanation; existing audit history and original
+  rows remain available.
 
 ## Scope and privacy
 
@@ -147,16 +192,26 @@ retiring your previous copy.
 
 The frontend and API share the local server. JSON endpoints include:
 
+Use `GET /api/health` first. If `setupRequired` is true, use setup before accessing
+the books. Other write requests must send `X-Bookkeeper-Workspace` with the
+`workspaceId` returned by health. Re-fetch health after changing books.
+
+- `GET /api/setup`, `POST /api/setup` — `mode` (`create`, `open`, `copy`),
+  absolute folder `directory`, first `businessName` for create, `sourceDirectory`
+  for copy. `POST /api/setup/browse` opens the local folder picker.
 - `GET /api/health`, `/api/businesses`, `/api/accounts`, `/api/categories`,
   `/api/documents`, `/api/transactions`
 - `POST /api/businesses`, `/api/accounts`
 - `POST /api/imports/preview` — `filename`, `contentBase64`
-- `POST /api/imports/commit` — `token`, `accountId`, provider `confirmMapping`,
-  optional explicit `allowDuplicate`
+- `POST /api/imports/commit` — `token`, `accountId`, `confirmExtraction: true`,
+  provider `confirmMapping`, optional `rememberLayout`, explicit `allowDuplicate`
 - `PATCH /api/transactions/{id}` — reviewed fields, including explicit
   `includeInTotals`
 - `POST /api/review/batch` — unique `ids`, `action`, optional `businessId`
 - `GET /api/review/actions`, `GET /api/transactions/{id}/history`
+- `GET /api/transactions/{id}/explanation`
+- `GET /api/import-profiles`, `POST /api/import-profiles/revoke` — remembered
+  import layouts and revocation by profile `id`.
 - `POST /api/review/undo` — `actionId`
 - `POST /api/duplicates/resolve` — `transactionId`, `canonicalId`,
   `decision` (`duplicate` or `distinct`)

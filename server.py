@@ -13,6 +13,7 @@ import re
 import secrets
 import sqlite3
 import threading
+import zipfile
 import uuid
 from contextlib import contextmanager
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -20,8 +21,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from statement_import import parse_statement
 from reports import excel_report, safe_text
-from backup import create_backup
+from backup import create_backup, restore_backup
 import categorization
+import workspace_store
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local-bookkeeper")) / "LocalBookkeeper"
@@ -32,6 +34,10 @@ HOST = "127.0.0.1"
 PORT = int(os.environ.get("LOCAL_BOOKKEEPER_PORT", "8765"))
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 STAGING_LOCK = threading.Lock()
+WORKSPACE_LOCK = threading.RLock()
+WORKSPACE_READY = False
+WORKSPACE_ID = ''
+SETUP_ERROR = ''
 
 BASE_CATEGORIES = [
     "Fuel", "Vehicle maintenance", "Tires", "Insurance", "Registration / taxes",
@@ -56,10 +62,10 @@ def connect():
         db.close()
 
 
-def initialize() -> None:
+def initialize(initial_business=None) -> None:
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
     with connect() as db:
-        if db.execute('PRAGMA user_version').fetchone()[0] > 4:
+        if db.execute('PRAGMA user_version').fetchone()[0] > 5:
             raise RuntimeError('This database was created by a newer version of Local Bookkeeper.')
         db.executescript("""
         CREATE TABLE IF NOT EXISTS businesses (
@@ -117,13 +123,15 @@ def initialize() -> None:
         """)
         now = utc_now()
         business = db.execute("SELECT id FROM businesses ORDER BY created_at LIMIT 1").fetchone()
-        if business is None:
-            business_id = "business-charlottesville-transportation"
+        if business is None and initial_business:
+            business_id = str(uuid.uuid4())
             db.execute("INSERT INTO businesses(id,legal_name,display_name,created_at) VALUES(?,?,?,?)",
-                       (business_id, "Charlottesville Transportation LLC", "Charlottesville Transportation LLC", now))
+                       (business_id, initial_business, initial_business, now))
+        elif business is None:
+            business_id = None
         else:
             business_id = business["id"]
-        for name in BASE_CATEGORIES:
+        for name in BASE_CATEGORIES if business_id else []:
             db.execute("INSERT OR IGNORE INTO categories(id,business_id,name) VALUES(?,?,?)",
                        ("cat-" + slug(name), business_id, name))
         columns = {r['name'] for r in db.execute('PRAGMA table_info(documents)')}
@@ -150,7 +158,78 @@ def initialize() -> None:
               NOT ((NEW.direction='debit' AND NEW.transaction_kind IN ('expense','fee')) OR (NEW.direction='credit' AND NEW.transaction_kind='refund'))))
             BEGIN SELECT RAISE(ABORT,'Transaction violates amount, review or reporting rules'); END''')
         categorization.initialize(db)
-        db.execute("PRAGMA user_version=4")
+        db.executescript('''
+        CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY,value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS import_profiles (
+          id TEXT PRIMARY KEY,account_id TEXT NOT NULL REFERENCES accounts(id),layout_key TEXT NOT NULL,
+          provider TEXT NOT NULL,format TEXT NOT NULL,extraction_json TEXT NOT NULL,confirmed_at TEXT NOT NULL,
+          active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+          UNIQUE(account_id,layout_key)
+        );
+        ''')
+        db.execute("INSERT OR IGNORE INTO app_metadata VALUES('workspace_id',?)",(str(uuid.uuid4()),))
+        db.execute(f'PRAGMA application_id={workspace_store.APP_ID}')
+        db.execute("PRAGMA user_version=5")
+
+
+def activate_workspace(directory, business=None, remember=False):
+    global DATA_DIR,DOCS_DIR,DB_PATH,WORKSPACE_READY,WORKSPACE_ID,SETUP_ERROR
+    previous = DATA_DIR,DOCS_DIR,DB_PATH,WORKSPACE_READY,WORKSPACE_ID
+    DATA_DIR,DOCS_DIR,DB_PATH = directory,directory/'documents',directory/'bookkeeper.sqlite3'
+    try:
+        initialize(business)
+        with connect() as db:
+            workspace_id = db.execute("SELECT value FROM app_metadata WHERE key='workspace_id'").fetchone()[0]
+        if remember: workspace_store.save_preferences(directory)
+        WORKSPACE_READY,WORKSPACE_ID,SETUP_ERROR = True,hashlib.sha256((workspace_id+'|'+str(DB_PATH)).encode()).hexdigest(),''
+    except Exception:
+        DATA_DIR,DOCS_DIR,DB_PATH,WORKSPACE_READY,WORKSPACE_ID = previous
+        raise
+
+
+def setup_status():
+    candidates = []
+    for path in (DATA_DIR,DEFAULT_DATA_DIR,ROOT/'data'):
+        if (path/'bookkeeper.sqlite3').is_file() and str(path) not in candidates:
+            candidates.append(str(path))
+    return {'configured':WORKSPACE_READY,'directory':str(DATA_DIR) if WORKSPACE_READY else None,
+            'defaultDirectory':str(workspace_store.default_directory()),'existingDirectories':candidates,
+            'error':SETUP_ERROR,'applicationDirectory':str(ROOT)}
+
+
+def configure_workspace(body):
+    mode = body.get('mode')
+    directory = workspace_store.directory_path(body.get('directory'))
+    if mode not in {'create','open','copy'}: raise ValueError('Choose create, open, or copy existing books.')
+    if mode in {'create','copy'} and (directory==ROOT or directory.is_relative_to(ROOT)):
+        raise ValueError('Choose a books folder outside the app folder so updates and reinstalls keep your data separate.')
+    if mode == 'create':
+        name = body.get('businessName','')
+        if not isinstance(name,str) or not name.strip() or len(name.strip())>200:
+            raise ValueError('Enter the first business name, up to 200 characters.')
+        if directory.exists() and any(directory.iterdir()):
+            raise ValueError('Choose a new or empty folder. Use Open existing books for a folder that already contains a database.')
+        directory.mkdir(parents=True,exist_ok=True)
+        # Reserve a new database file exclusively; never overwrite existing books.
+        try:
+            with (directory/'bookkeeper.sqlite3').open('xb'): pass
+        except FileExistsError as exc:
+            raise ValueError('That folder already contains books. Choose Open existing books or another folder.') from exc
+        activate_workspace(directory,name.strip(),remember=True)
+    elif mode == 'open':
+        workspace_store.validate_existing(directory)
+        activate_workspace(directory,remember=True)
+    else:
+        source = workspace_store.directory_path(body.get('sourceDirectory'))
+        workspace_store.validate_existing(source)
+        if directory.exists() and any(directory.iterdir()): raise ValueError('Copy books into a new or empty folder. Existing files are never overwritten.')
+        content = create_backup(source/'bookkeeper.sqlite3',source)
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            if json.loads(archive.read('manifest.json'))['missingSources']:
+                raise ValueError('Some retained originals are missing. Restore them before copying the books, or open the existing folder.')
+        restore_backup(io.BytesIO(content),directory,allow_empty=True)
+        activate_workspace(directory,remember=True)
+    return {'ok':True,'directory':str(DATA_DIR),'database':str(DB_PATH),'workspaceId':WORKSPACE_ID}
 
 
 def utc_now() -> str:
@@ -267,7 +346,7 @@ def parse_csv(content: bytes, filename: str) -> dict:
                     warnings["invalid_rows"] += 1
                     raw_amount = f"debit={debit_raw}; credit={credit_raw}"
                 else:
-                    source_cents = abs(credit_cents) if credit_cents else abs(debit_cents)
+                    source_cents = credit_cents if credit_cents else debit_cents
                     raw_amount = credit_raw or debit_raw
                     direction = "credit" if credit_cents else "debit" if debit_cents else "unknown"
         except ValueError:
@@ -294,7 +373,14 @@ def parse_csv(content: bytes, filename: str) -> dict:
     if not result:
         raise ValueError("No monetary transaction rows could be parsed. Check the amount columns.")
     warnings["total"] = sum(warnings.values())
-    return {"filename": Path(filename).name, "headers": headers, "rows": result, "warnings": warnings}
+    column_indexes = {'date':date_i,'postedDate':posted_i,'description':desc_i,'amount':amount_i,'debit':debit_i,'credit':credit_i,'type':type_i,'sourceCategory':find('category','transactioncategory')}
+    columns = {key:{'index':index,'header':headers[index],
+        'purpose':'Not used: Amount column takes priority.' if amount_i>=0 and key in {'debit','credit'} else
+            'Retained as statement evidence, not an approved business category.' if key=='sourceCategory' else 'Read by the import adapter.'}
+        for key,index in column_indexes.items() if index>=0}
+    return {"filename":Path(filename).name,"headers":headers,"rows":result,"warnings":warnings,
+        'extraction':{'headerRow':header_index+1,'sheet':None,'columns':columns,'metadataRowsSkipped':header_index,
+            'blankRowsSkipped':sum(not any(c.strip() for c in row) for row in rows[header_index+1:]),'otherSheets':[]}}
 
 
 def transaction_json(row: sqlite3.Row) -> dict:
@@ -355,7 +441,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            return self.get_request()
+            with WORKSPACE_LOCK:
+                return self.get_request()
         except (ValueError,sqlite3.Error) as exc:
             return self.send_json(400, {'error':str(exc)})
         except Exception:
@@ -368,7 +455,17 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(403, {'error': 'Open the app at its local address.'})
         path = unquote(urlparse(self.path).path)
         if path == "/api/health":
-            return self.send_json(200, {"ok": True, "database": str(DB_PATH), "dataDirectory": str(DATA_DIR)})
+            return self.send_json(200, {"ok": True, "setupRequired":not WORKSPACE_READY,'workspaceId':WORKSPACE_ID,
+                "database":str(DB_PATH) if WORKSPACE_READY else None,"dataDirectory":str(DATA_DIR) if WORKSPACE_READY else None,'setup':setup_status()})
+        if path == '/api/setup':
+            return self.send_json(200,setup_status())
+        if path.startswith('/api/') and not WORKSPACE_READY:
+            return self.send_json(409,{'error':'Choose or create your books folder to begin.','setupRequired':True})
+        if path == '/api/import-profiles':
+            with connect() as db:
+                return self.send_json(200,[dict(r) for r in db.execute('SELECT p.id,p.provider,p.format,p.confirmed_at,a.nickname,a.last_four FROM import_profiles p JOIN accounts a ON a.id=p.account_id WHERE p.active=1 ORDER BY p.confirmed_at DESC')])
+        if path.endswith('/explanation') and path.startswith('/api/transactions/'):
+            return self.explain_transaction(path.split('/')[3])
         if path == "/api/businesses":
             with connect() as db:
                 return self.send_json(200, [dict(r) for r in db.execute("SELECT * FROM businesses WHERE active=1 ORDER BY display_name")])
@@ -407,21 +504,43 @@ class Handler(SimpleHTTPRequestHandler):
             return self.export_excel()
         if path == "/api/export.csv":
             return self.export_csv()
-        if path in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css'}:
+        if path in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css'}:
             return super().do_GET()
         return self.send_error(404)
 
     def do_HEAD(self):
         # SimpleHTTPRequestHandler otherwise allows HEAD to bypass GET's allowlist.
-        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css'}:
+        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css'}:
             return super().do_HEAD()
         return self.send_error(404)
 
     def do_POST(self):
         if not self.local_request():
+            return self.send_json(403, {'error':'Requests must come from the local app.'})
+        if urlparse(self.path).path == '/api/setup/browse':
+            try:
+                body = self.read_json()
+                return self.send_json(200,{'directory':workspace_store.choose_directory(str(body.get('initial','')))})
+            except (ValueError,OSError) as exc:
+                return self.send_json(400,{'error':str(exc)})
+        with WORKSPACE_LOCK:
+            return self.post_request()
+
+    def post_request(self):
+        if not self.local_request():
             return self.send_json(403, {'error': 'Requests must come from the local app.'})
         path = urlparse(self.path).path
         try:
+            if path == '/api/setup':
+                return self.send_json(200,configure_workspace(self.read_json()))
+            if not WORKSPACE_READY:
+                return self.send_json(409,{'error':'Choose or create your books folder to begin.'})
+            if self.headers.get('X-Bookkeeper-Workspace') != WORKSPACE_ID:
+                return self.send_json(409,{'error':'The active database changed or this page is out of date. Refresh before saving changes.'})
+            if path == '/api/import-profiles/revoke':
+                body = self.read_json()
+                with connect() as db: db.execute('UPDATE import_profiles SET active=0 WHERE id=?',(body.get('id'),))
+                return self.send_json(200,{'ok':True})
             if path in {'/api/categorization/preview','/api/categorization/apply'}:
                 body = self.read_json()
                 with connect() as db:
@@ -462,6 +581,7 @@ class Handler(SimpleHTTPRequestHandler):
                 file_hash = hashlib.sha256(content).hexdigest()
                 with connect() as db:
                     existing = db.execute("SELECT id FROM documents WHERE file_hash=?", (file_hash,)).fetchone()
+                    profiles = [dict(r) for r in db.execute('SELECT p.id,p.account_id,p.confirmed_at,a.nickname FROM import_profiles p JOIN accounts a ON a.id=p.account_id WHERE p.active=1 AND p.layout_key=?',(parsed['layout_key'],))]
                     duplicate_count = 0
                     for tx in parsed["rows"]:
                         duplicate_count += bool(db.execute("SELECT 1 FROM transactions WHERE source_fingerprint=? LIMIT 1", (tx["fingerprint"],)).fetchone())
@@ -478,7 +598,8 @@ class Handler(SimpleHTTPRequestHandler):
                     "rowCount": len(parsed["rows"]), "debitCents": debits, "creditCents": credits,
                     "headers": parsed["headers"], "warnings": parsed["warnings"],
                     "provider": parsed['provider'], "reconciliation": parsed['reconciliation'], "requiresMappingConfirmation": parsed['provider'] == 'American Express',
-                    "rows": [{"date": r["date"], "description": r["description"], "amountCents": r["amount_cents"], "sourceAmountCents": r["source_amount_cents"], "direction": r["direction"], "sourceRow": r["source_row"]} for r in parsed["rows"][:20]]})
+                    'extraction':parsed['extraction'],'rememberedLayouts':profiles,
+                    "rows": [{"date":r["date"],"description":r["description"],"amountCents":r["amount_cents"],"sourceAmountCents":r["source_amount_cents"],"direction":r["direction"],"sourceRow":r["source_row"],'evidence':r['raw']['evidence'],'kind':r['transaction_kind']} for r in parsed["rows"][:20]]})
             if path == "/api/imports/commit":
                 return self.commit_import()
             if path == '/api/review/undo':
@@ -501,6 +622,26 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception as exc:
             return self.send_json(500, {"error": str(exc)})
 
+    def explain_transaction(self, transaction_id):
+        with connect() as db:
+            row = db.execute('SELECT t.*,d.filename,d.provider,d.metadata_json FROM transactions t LEFT JOIN documents d ON d.id=t.document_id WHERE t.id=?',(transaction_id,)).fetchone()
+            if not row: return self.send_json(404,{'error':'Transaction not found.'})
+            raw = json.loads(row['source_raw_json'])
+            history = db.execute('''SELECT h.reason,h.changed_at,h.action,a.description FROM transaction_history h
+                LEFT JOIN review_actions a ON a.id=h.action_id WHERE h.transaction_id=?
+                AND h.field_name IN ('category','category_name') ORDER BY h.rowid DESC LIMIT 1''',(transaction_id,)).fetchone()
+            category_reason = (history['reason'] or history['description'] or 'Explicit transaction edit') if history else (
+                'No business category has been assigned; this row is awaiting review.' if 'uncategorized' in row['category_name'].lower() else
+                'This category predates detailed decision explanations. Check its retained review history; no reason has been inferred.')
+            value = categorization.suggestion(row,categorization.rules(db))
+            result = {'source':{'filename':row['filename'],'provider':row['provider'],'row':row['source_row'],'sheet':raw.get('sheet')},
+                'importEvidence':raw.get('evidence'),'extraction':json.loads(row['metadata_json'] or '{}').get('extraction'),
+                'sourceColumns':[{'header':str(h),'value':str(v)} for h,v in zip(raw.get('headers',[]),raw.get('values',[])) if str(h).strip()],
+                'current':{'date':row['date'],'amountCents':row['amount_cents'],'direction':row['direction'],'kind':row['transaction_kind'],
+                    'category':row['category_name'],'classification':row['classification'],'includeInTotals':bool(row['include_in_totals'])},
+                'categoryReason':category_reason,'categoryDecidedAt':history['changed_at'] if history else None,'suggestion':value}
+        return self.send_json(200,result)
+
     def commit_import(self):
         body = self.read_json()
         with connect() as db:
@@ -509,6 +650,10 @@ class Handler(SimpleHTTPRequestHandler):
             if not staged:
                 return self.send_json(404, {'error': 'Import preview expired or was already committed. Choose the file again.'})
             parsed = json.loads(staged['parsed_json'])
+            if 'extraction' not in parsed:
+                raise ValueError('This preview predates the import explanation update. Choose the file again to review its columns.')
+            if body.get('confirmExtraction') is not True:
+                raise ValueError('Confirm the source columns, selected rows and amount interpretation before importing.')
             account_id = body.get('accountId')
             if not db.execute('SELECT id FROM accounts WHERE id=? AND active=1', (account_id,)).fetchone():
                 raise ValueError('Choose a valid source account.')
@@ -526,7 +671,7 @@ class Handler(SimpleHTTPRequestHandler):
                 with temporary.open('xb') as output:
                     output.write(staged['content']); output.flush(); os.fsync(output.fileno())
                 temporary.replace(target)
-                metadata = {'reconciliation': parsed['reconciliation'], 'rowCount': len(parsed['rows']), 'mappingConfirmed': body.get('confirmMapping') is True}
+                metadata = {'reconciliation':parsed['reconciliation'],'rowCount':len(parsed['rows']),'mappingConfirmed':body.get('confirmMapping') is True,'extractionConfirmed':True,'extraction':parsed['extraction']}
                 dates = [r['date'] for r in parsed['rows'] if parse_date(r['date'])]
                 db.execute('INSERT INTO documents(id,filename,file_hash,stored_path,provider,format,statement_start,statement_end,imported_at,default_classification,parser_version,metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
                     (document_id, parsed['filename'], staged['file_hash'], target.relative_to(DATA_DIR).as_posix(), parsed['provider'], parsed['format'], min(dates) if dates else None, max(dates) if dates else None, now, 'unknown', parsed['parser_version'], json.dumps(metadata)))
@@ -539,6 +684,10 @@ class Handler(SimpleHTTPRequestHandler):
                         (tx_id,document_id,account_id,tx['date'],tx['posted_date'],tx['description'],tx['merchant'],tx['raw_amount_text'],tx['source_amount_cents'],tx['amount_cents'],tx['direction'],tx['transaction_kind'],tx['fingerprint'],'unknown',tx['category_name'],'needs_review',tx['source_row'],json.dumps(tx['raw']),now,now))
                     inserted.append({'id':tx_id, 'duplicateCandidate':possible['id'] if possible else None})
                 db.execute('DELETE FROM staged_imports WHERE token=?', (body['token'],))
+                if body.get('rememberLayout') is True:
+                    db.execute('''INSERT INTO import_profiles(id,account_id,layout_key,provider,format,extraction_json,confirmed_at)
+                      VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id,layout_key) DO UPDATE SET extraction_json=excluded.extraction_json,confirmed_at=excluded.confirmed_at,active=1''',
+                      (str(uuid.uuid4()),account_id,parsed['layout_key'],parsed['provider'],parsed['format'],json.dumps(parsed['extraction']),now))
                 db.commit()
             except Exception:
                 temporary.unlink(missing_ok=True)
@@ -654,6 +803,7 @@ class Handler(SimpleHTTPRequestHandler):
             new_row = db.execute("SELECT * FROM transactions WHERE id=?", (transaction_id,)).fetchone()
             new_state = {key: new_row[key] for key in columns}
             self.record_change(db,transaction_id,old_state,new_state,action_id,'edit',now)
+            db.execute('UPDATE transaction_history SET reason=? WHERE action_id=?',('You explicitly saved this transaction in the editor. The chosen category is “'+new_row['category_name']+'”; amount '+format(Decimal(new_row['amount_cents'])/100,'.2f')+' USD and movement '+new_row['direction']+'.',action_id))
         return self.send_json(200, {"ok": True, 'actionId':action_id})
 
     @staticmethod
@@ -817,11 +967,23 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main() -> None:
-    initialize()
+    global SETUP_ERROR
+    preferences,error = workspace_store.load_preferences()
+    SETUP_ERROR = error
+    if preferences:
+        try:
+            directory = workspace_store.directory_path(preferences['directory'])
+            workspace_store.validate_existing(directory)
+            activate_workspace(directory)
+        except (ValueError,OSError,sqlite3.Error) as exc:
+            SETUP_ERROR = str(exc)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"Local Bookkeeper running at http://{HOST}:{PORT}")
-    print(f"SQLite database: {DB_PATH}")
-    print(f"Managed source files: {DOCS_DIR}")
+    if WORKSPACE_READY:
+        print(f"SQLite database: {DB_PATH}")
+        print(f"Managed source files: {DOCS_DIR}")
+    else:
+        print('Choose Create or Open books in the app to select your database location.')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
