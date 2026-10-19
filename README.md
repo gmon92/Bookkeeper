@@ -84,7 +84,13 @@ shown in All activity/Personal until assigned to a business.
   alternatives, for example `shell | exxon`. Press `/` to focus search.
 - **Merchant groups** brings repeated descriptions together within each source
   account. Long numeric references are ignored for grouping only; the original
-  descriptions remain unchanged. Open a group to inspect its rows.
+  descriptions remain unchanged. **Categorize entire group** opens one decision
+  for every transaction in that card. **View rows** keeps a **Categorize all**
+  action above the listed group. To apply one decision across multiple groups,
+  filter the list, then use **Categorize all** in the merchant groups toolbar.
+  The count always reflects the current filters. The dialog lists every affected
+  transaction, provides a category dropdown with a custom category option, and
+  previews the batch before **Apply to all** saves it.
 - Select rows, a merchant group or all filtered results, then **Categorize &
   assign** (keyboard: `C`). Choose a business and category, optionally create a
   custom category, then preview the exact changes before saving. Keep current
