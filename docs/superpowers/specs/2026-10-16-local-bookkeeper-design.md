@@ -57,6 +57,12 @@ Each normalized transaction initially has exactly:
 - One classification: business, personal, transfer, or unknown.
 - One business when classification is business, otherwise no business.
 - One status.
+- One preserved raw amount plus normalized USD integer cents.
+- One direction: debit, credit, or unknown.
+- One transaction kind: expense, refund, transfer, fee, adjustment, or unknown.
+- One totals-inclusion decision, initially requiring review unless the source mapping is trusted.
+
+The importer must not use the numeric sign alone to determine meaning. Preserve the original amount text and source sign, then normalize the monetary magnitude separately from direction. Negative values must never be silently deleted, converted, or excluded. Approved refunds and credits reduce the related expense category totals while remaining visible as separate transactions. Transfers and personal/excluded items remain visible but do not count as business expenses.
 
 The source account answers "where did the money come from?" Classification answers "which books, if any, should include it?" These must remain separate.
 
@@ -173,8 +179,12 @@ Never require or persist full account numbers.
 - `posted_date` nullable
 - `description`
 - `merchant`
-- `amount`
-- `direction`
+- `raw_amount_text`
+- `source_amount_cents`
+- `amount_cents` (normalized USD integer cents)
+- `direction` (`debit`, `credit`, or `unknown`)
+- `transaction_kind` (`expense`, `refund`, `transfer`, `fee`, `adjustment`, or `unknown`)
+- `include_in_totals` (requires review unless source mapping is trusted)
 - `classification`
 - `business_id` nullable
 - `category_id` nullable
@@ -293,14 +303,21 @@ Before release:
 
 ## 14. Suggested implementation order
 
-1. SQLite schema, migrations, businesses, accounts, documents, transactions, and history.
-2. Local file storage and database backup/restore.
-3. Transaction review UI with manual add/edit/classification.
-4. CSV/XLSX importer with saved column mapping.
-5. Rule-based suggestions and safe batch approval.
-6. Text-based PDF adapter and generic fallback.
-7. Business/personal views and business-specific Excel exports.
-8. Provider profile management and stronger validation.
-9. OCR adapter for scanned PDFs.
+1. Finalize invariants: USD integer cents, raw/source amount preservation, direction and transaction-kind rules, refund/credit totals behavior, statuses, and import reconciliation.
+2. SQLite schema, migrations, businesses, accounts, documents, transactions, and history.
+3. Manual transaction entry and the review queue.
+4. Local source-file storage and database plus source-document backup/restore.
+5. CSV/XLSX importer with saved column mapping and preview validation.
+6. One trustworthy business expense ledger export.
+7. Rule-based suggestions and safe batch approval.
+8. Text-based PDF adapter and generic fallback.
+9. Business/personal views, provider profiles, and OCR.
+
+## 15. Immediate next steps
+
+- Gather a small representative test set of real CSV/XLSX statements, keeping originals unchanged.
+- Define expected totals and edge cases for each test file, including negative amounts, refunds, transfers, and duplicates.
+- Build the manual review workflow before advanced parsing.
+- Do not expand to PDFs, OCR, AI, or multiple businesses until the core import-review-export loop is trustworthy.
 
 Implementation should not begin until this written specification is reviewed and approved.
