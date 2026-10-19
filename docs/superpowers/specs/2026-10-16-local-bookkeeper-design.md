@@ -2,7 +2,7 @@
 
 ## Status
 
-Design approved in conversation; awaiting review of this written specification before implementation planning.
+Design reviewed and approved for implementation planning after the clarifications in this specification.
 
 ## 1. Purpose
 
@@ -56,13 +56,23 @@ Each normalized transaction initially has exactly:
 - One category or no category while awaiting review.
 - One classification: business, personal, transfer, or unknown.
 - One business when classification is business, otherwise no business.
-- One status.
-- One preserved raw amount plus normalized USD integer cents.
+- One review status.
+- One preserved raw amount plus normalized USD integer cents stored as a nonnegative magnitude.
 - One direction: debit, credit, or unknown.
 - One transaction kind: expense, refund, transfer, fee, adjustment, or unknown.
-- One totals-inclusion decision, initially requiring review unless the source mapping is trusted.
+- One totals-inclusion decision, requiring explicit user review.
 
-The importer must not use the numeric sign alone to determine meaning. Preserve the original amount text and source sign, then normalize the monetary magnitude separately from direction. Negative values must never be silently deleted, converted, or excluded. Approved refunds and credits reduce the related expense category totals while remaining visible as separate transactions. Transfers and personal/excluded items remain visible but do not count as business expenses.
+The importer must not use the numeric sign alone to determine meaning. Preserve the original amount text and source sign in `raw_amount_text` and `source_amount_cents`; normalize `amount_cents` as a nonnegative magnitude, and record money-out/money-in in `direction`. Negative values must never be silently deleted, converted, or excluded. Apply these reporting rules:
+
+- A purchase is a debit and adds to the assigned business expense category.
+- A refund is a credit and reduces the related expense category total while remaining visible as its own transaction.
+- A statement credit that is not a refund remains visible but does not reduce an expense category unless the user reviews and classifies it accordingly.
+- A transfer remains visible for reconciliation and is excluded from business expense totals.
+- Personal and excluded transactions remain visible and are excluded from business expense totals.
+
+Keep the four concepts distinct: `classification` says which books the transaction belongs to (business, personal, transfer, or unknown); `status` says its review state (needs review, suggested, or approved); `transaction_kind` describes the activity (expense, refund, transfer, fee, adjustment, or unknown); and `include_in_totals` records the reviewed reporting decision. Reporting uses `include_in_totals`, subject to the rules above. `status` does not encode personal, excluded, duplicate, or transfer classification; those belong in their respective fields. Suggestions never imply approval or totals inclusion.
+
+A trusted provider/column mapping may prefill parsed values and provide suggestions, but it never approves a transaction or sets `include_in_totals` without user review. A mapping becomes trusted only after a user confirms it during import; it remains editable and revocable.
 
 The source account answers "where did the money come from?" Classification answers "which books, if any, should include it?" These must remain separate.
 
@@ -133,7 +143,7 @@ The database is the canonical source of truth.
 ### `accounts`
 
 - `id`
-- `business_id` nullable for personal accounts
+- `business_id` nullable for personal or shared accounts; when set, it identifies the business that owns or primarily uses the account, for workspace organization. A transaction from any account may still be assigned to a different business.
 - `nickname`
 - `institution`
 - `last_four`
@@ -141,7 +151,7 @@ The database is the canonical source of truth.
 - `active`
 - `notes`
 
-Never require or persist full account numbers.
+Never require or persist full account numbers. Personal accounts have no business owner. Accounts shared across businesses may have no `business_id`; each transaction's `business_id` determines its books.
 
 ### `documents`
 
@@ -156,6 +166,8 @@ Never require or persist full account numbers.
 - `imported_at`
 - `default_classification`
 - `parser_version`
+
+On import, copy each original source file into managed local storage and record its content hash and managed path. Do not rely on the file remaining at its original download location. If the managed copy later becomes unavailable, retain transactions and import metadata and flag the missing source so the user can locate or restore it. Handle filename collisions without overwriting an existing source; the content hash identifies exact re-imports.
 
 ### `import_rows`
 
@@ -184,7 +196,7 @@ Never require or persist full account numbers.
 - `amount_cents` (normalized USD integer cents)
 - `direction` (`debit`, `credit`, or `unknown`)
 - `transaction_kind` (`expense`, `refund`, `transfer`, `fee`, `adjustment`, or `unknown`)
-- `include_in_totals` (requires review unless source mapping is trusted)
+- `include_in_totals` (requires explicit user review; trusted mappings cannot approve this decision)
 - `source_fingerprint`
 - `duplicate_of` nullable
 - `classification`
@@ -268,16 +280,13 @@ Exact document hashes should warn before re-import. Overlapping statement period
 
 ## 9. Statuses and review behavior
 
-Initial statuses:
+Review statuses:
 
 - `needs_review`
 - `suggested`
 - `approved`
-- `personal`
-- `excluded`
-- `duplicate`
-- `transfer`
-- `manually_added`
+
+Personal, excluded, duplicate, and transfer are classifications, transaction kinds, and/or duplicate-link outcomes as appropriate; they are not review statuses. Manual entry is recorded by transaction provenance (for example, a null `document_id`), not a review status. Approval means the user reviewed and accepted the transaction's data and classification. It does not by itself mean the transaction is included in business totals; that is controlled by the separately reviewed `include_in_totals` decision.
 
 Suggestions are never approvals. Every suggestion should display its reason, such as a prior approved merchant/account mapping or keyword rule.
 
@@ -321,7 +330,7 @@ Tax-related reports must be labeled as preparation assistance and should flag ve
 
 ## 12. Local storage and backup
 
-Store the database, source documents, parser profiles, and generated exports locally. Use file hashes for duplicate-document detection. Provide a backup operation that packages the SQLite database, original documents, and parser profiles. Restore must be tested before the app is considered complete.
+Store the database, managed copies of source documents, parser profiles, and generated exports locally. Import copies are authoritative evidence; the original download location is not required after import. Use file hashes for duplicate-document detection. Provide a backup operation that packages the SQLite database, source documents, and parser profiles. Restore must be tested before the app is considered complete.
 
 No external service is required for normal operation. Optional local OCR or local AI may be added later without changing the data boundary.
 
@@ -343,12 +352,12 @@ Before release:
 
 ## 14. Suggested implementation order
 
-1. Finalize invariants: USD integer cents, raw/source amount preservation, direction and transaction-kind rules, refund/credit totals behavior, statuses, and import reconciliation.
-2. SQLite schema, migrations, businesses, accounts, documents, transactions, and history.
-3. Manual transaction entry and the review queue.
-4. Local source-file storage and database plus source-document backup/restore.
-5. CSV/XLSX importer with saved column mapping and preview validation.
-6. One trustworthy business expense ledger export.
+1. Finalize and enforce invariants: USD integer cents, raw/source amount preservation, direction and transaction-kind rules, refund/credit totals behavior, review status versus totals inclusion, and import reconciliation.
+2. SQLite schema and migrations, including businesses, accounts, documents, transactions, and history.
+3. Local managed source-file storage and database plus source-document backup/restore.
+4. Manual transaction entry as a supporting feature and the review queue.
+5. CSV/XLSX importer with saved column mappings and preview validation.
+6. One complete, trustworthy loop: CSV/XLSX import, review and approval, and a business expense ledger export.
 7. Rule-based suggestions and safe batch approval.
 8. Text-based PDF adapter and generic fallback.
 9. Business/personal views, provider profiles, and OCR.
@@ -357,7 +366,7 @@ Before release:
 
 - Gather a small representative test set of real CSV/XLSX statements, keeping originals unchanged.
 - Define expected totals and edge cases for each test file, including negative amounts, refunds, transfers, and duplicates.
-- Build the manual review workflow before advanced parsing.
+- Build the CSV/XLSX import-review-export loop, with manual entry available as a supporting feature, before advanced parsing.
 - Do not expand to PDFs, OCR, AI, or multiple businesses until the core import-review-export loop is trustworthy.
 
-Implementation should not begin until this written specification is reviewed and approved.
+Implementation planning may begin from this reviewed specification. The first release should complete the CSV/XLSX import, review/approval, and business expense ledger export loop before expanding to PDFs, OCR, or other advanced parsing.
