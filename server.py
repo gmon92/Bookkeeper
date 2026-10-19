@@ -602,6 +602,11 @@ class Handler(SimpleHTTPRequestHandler):
                 values["category_id"] = category["id"] if category else None
             else:
                 values["category_name"] = current["category_name"]; values["category_id"] = current["category_id"]
+            if values['classification'] == 'business':
+                category = db.execute('SELECT id FROM categories WHERE active=1 AND name=? AND (business_id=? OR business_id IS NULL) ORDER BY business_id IS NULL LIMIT 1', (values['category_name'],values['business_id'])).fetchone()
+                if not category:
+                    raise ValueError('Choose a category belonging to this business.')
+                values['category_id'] = category['id']
             self.validate_transaction(db, values)
             values["updated_at"] = now
             db.execute("""UPDATE transactions SET date=?,posted_date=?,description=?,merchant=?,account_id=?,amount_cents=?,direction=?,transaction_kind=?,classification=?,business_id=?,category_id=?,category_name=?,status=?,include_in_totals=?,excluded=?,notes=?,updated_at=? WHERE id=?""",
@@ -629,6 +634,8 @@ class Handler(SimpleHTTPRequestHandler):
             raise ValueError('Choose an active source account.')
         if values['business_id'] and not db.execute('SELECT id FROM businesses WHERE id=? AND active=1',(values['business_id'],)).fetchone():
             raise ValueError('Choose an active business.')
+        if values['classification'] == 'business' and not db.execute('SELECT id FROM categories WHERE active=1 AND name=? AND (business_id=? OR business_id IS NULL)',(values['category_name'],values['business_id'])).fetchone():
+            raise ValueError('Choose a category belonging to this business.')
         if values['include_in_totals']:
             valid_kind = (values['direction'] == 'debit' and values['transaction_kind'] in {'expense','fee'}) or (values['direction'] == 'credit' and values['transaction_kind'] == 'refund')
             if not valid_kind or values['classification'] != 'business' or not values['business_id'] or values['duplicate_of'] or values['status'] != 'approved' or values['amount_cents'] == 0 or 'uncategorized' in values['category_name'].lower() or not values['category_name'].strip():
