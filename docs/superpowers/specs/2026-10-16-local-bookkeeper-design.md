@@ -185,6 +185,8 @@ Never require or persist full account numbers.
 - `direction` (`debit`, `credit`, or `unknown`)
 - `transaction_kind` (`expense`, `refund`, `transfer`, `fee`, `adjustment`, or `unknown`)
 - `include_in_totals` (requires review unless source mapping is trusted)
+- `source_fingerprint`
+- `duplicate_of` nullable
 - `classification`
 - `business_id` nullable
 - `category_id` nullable
@@ -252,6 +254,18 @@ Action types include `batch_approve`, `batch_categorize`, `batch_assign_business
 
 `old_state` and `new_state` capture the fields changed by the action. This allows a batch action to be reversed without deleting the audit trail.
 
+### `duplicate_candidates`
+
+- `id`
+- `transaction_id`
+- `possible_duplicate_id`
+- `match_score`
+- `match_reasons`
+- `status` (`candidate`, `confirmed_duplicate`, or `not_duplicate`)
+- `reviewed_at` nullable
+
+Exact document hashes should warn before re-import. Overlapping statement periods should warn but not block. Transaction fingerprints should use source account, transaction date, posted date when available, normalized amount, direction, and normalized merchant. Exact fingerprints are high-confidence candidates; similar merchants, nearby dates, and matching amounts are lower-confidence candidates. Confirmed duplicates retain both source records, mark the non-canonical transaction as `duplicate`, set `duplicate_of`, and exclude it from totals.
+
 ## 9. Statuses and review behavior
 
 Initial statuses:
@@ -270,6 +284,8 @@ Suggestions are never approvals. Every suggestion should display its reason, suc
 Batch groups should be based on normalized merchant, source account, proposed business, proposed category, and confidence. Before applying a batch action, show affected-row count, total amount, accounts, businesses, proposed changes, and exceptions. Record the batch action in `review_actions`, record each transaction's old and new state in `review_action_items`, and link field-level changes through `transaction_history.action_id`.
 
 Undo must create a new reversal action rather than deleting history. The app should compare each transaction's current state with the state produced by the original action. Safely reversible rows may be undone; rows changed afterward must be reported as conflicts and left for manual review. The original action status becomes `undone` or `partially_undone`.
+
+Duplicate candidates must be reviewed rather than silently removed. A confirmed duplicate keeps both source documents and transaction records, marks one transaction as canonical, marks the other `duplicate`, links it through `duplicate_of`, and excludes the duplicate from business totals. A `not_duplicate` decision prevents the same candidate pair from resurfacing without deleting either transaction.
 
 Rules learned from corrections must be scoped and previewable. The app must not silently apply a new correction to historical transactions.
 
