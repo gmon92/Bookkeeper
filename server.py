@@ -534,13 +534,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self.export_excel()
         if path == "/api/export.csv":
             return self.export_csv()
-        if path in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css'}:
+        if path in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js'}:
             return super().do_GET()
         return self.send_error(404)
 
     def do_HEAD(self):
         # SimpleHTTPRequestHandler otherwise allows HEAD to bypass GET's allowlist.
-        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css'}:
+        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js'}:
             return super().do_HEAD()
         return self.send_error(404)
 

@@ -161,7 +161,7 @@ def plan(db, body, validate):
             exceptions.append({'id':row['id'],'description':row['description'],'reason':str(exc)})
     # Includes source state and effective suggestions, so a preview cannot be
     # applied after another edit or a changed rule produces a different result.
-    if body.get('rememberRule'):
+    if body.get('rememberRule') and not exceptions:
         if mode != 'categorize': raise ValueError('Save rules from a chosen category, not from multiple suggestions.')
         pattern = body.get('rulePattern','')
         if not isinstance(pattern,str) or not 2 <= len(merchant_text(pattern)) or len(pattern.strip()) > 120:

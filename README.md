@@ -101,7 +101,7 @@ shown in All activity/Personal until assigned to a business.
   filter the list, then use **Categorize all** in the merchant groups toolbar.
   The count always reflects the current filters. The dialog lists every affected
   transaction, provides a category dropdown with a custom category option, and
-  previews the batch before **Apply to all** saves it.
+  previews the batch before saving the checked transactions.
 - **Statement category groups** batches every transaction by the category
   description in its original statement, including matching transactions across
   merchants and accounts. Blank source categories form a separate group. The
@@ -116,6 +116,16 @@ shown in All activity/Personal until assigned to a business.
   **Mark reviewed** and **Include eligible expenses** are separate explicit
   choices. Transfers, confirmed duplicates and invalid reporting rows require
   separate attention. An exception prevents the entire batch from being saved.
+- Expand **See all transactions** in a category or credit batch to check or
+  uncheck individual rows. The selected count, amount and preview update to the
+  checked set; leaving a row out only omits it from this batch and does not mark
+  it excluded from bookkeeping.
+- A category preview's **Needs attention** rows offer **Review transaction**,
+  **Leave out of this batch**, and **Leave all flagged rows out**. Review opens
+  the transaction drawer and returns to the batch after saving or going back,
+  preserving the selection, business, category and review choices. Preview again
+  after a repair. Credits can also be handled separately and left out of the
+  category batch. Nothing is applied while checked rows remain blocked.
 - Preview revisions detect intervening transaction or rule changes. Every
   applied batch has field history and can be reversed in **Data & storage**.
 - **Remember this merchant** can save a source-account-scoped rule with the batch.

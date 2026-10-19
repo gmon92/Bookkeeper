@@ -91,12 +91,13 @@ function openCategorize(ids=[...state.selected],mode='categorize',scope=null){
   if(rows.every(t=>t.direction==='credit')){openCreditDecision(rows.map(t=>t.id));return;}
   if(rows.length>5000){toast('This set has more than 5,000 transactions. Narrow the filters before categorizing.');return;}
   triage.bulk={ids:rows.map(r=>r.id),mode,revision:null,scope};
+  initializeBatchSelection(triage.bulk,rows.map(r=>r.id));
   $('#categorize-form').reset();$('#categorize-preview').hidden=true;$('#categorize-preview').innerHTML='';
   $('#categorize-title').textContent=mode==='suggestions'?'Put the suggestions in place.':scope?'Categorize all '+rows.length+' transactions.':'One category. Many rows.';
   $('#categorize-description').textContent=(scope?scope.label+' · ':'')+rows.length+' transactions · '+money(rows.reduce((n,t)=>n+t.amountCents,0))+' in activity. '+(mode==='suggestions'?'Preview each rule’s proposed category. Rows stay unapproved and outside totals.':'The same category and business decision will apply to every transaction below.');
   $('#categorize-scope-summary').textContent='See all '+rows.length+' transactions receiving this decision';
   $('#categorize-scope').open=!!scope&&rows.length<=10;
-  $('#categorize-scope-rows').innerHTML='<table><thead><tr><th>Transaction / source account</th><th>Date / amount</th><th>Current category / books</th></tr></thead><tbody>'+rows.map(t=>'<tr><td>'+e(t.merchant||t.description)+'<small>'+e(t.account)+'</small></td><td>'+e(formatDate(t.date))+'<small>'+signedMoney(t)+'</small></td><td>'+e(t.category)+'<small>'+e(t.classification==='business'?businessName(t.businessId):t.classification)+'</small></td></tr>').join('')+'</tbody></table>';
+
   $('#categorize-controls').hidden=mode==='suggestions';
   const businessIds=[...new Set(rows.map(t=>t.businessId))],shared=businessIds.length===1&&businessIds[0],defaultBusiness=!['all','personal'].includes(state.workspace)?state.workspace:shared||'';
   const needsBusiness=rows.some(t=>t.classification!=='business'||!t.businessId);
@@ -110,11 +111,20 @@ function openCategorize(ids=[...state.selected],mode='categorize',scope=null){
   const families=[...new Set(rows.map(merchantFamily))];$('#bulk-rule-pattern').value=families.length===1?families[0]:'';
   $('#bulk-include').disabled=true;$('#categorize-submit').textContent='Preview changes for all '+rows.length;$('#categorize-submit').disabled=false;
   $('#bulk-business').disabled=mode==='suggestions';$('#bulk-category').disabled=mode==='suggestions';
-  showDialog('categorize-dialog');
+  renderBatchScope('category');showDialog('categorize-dialog');
 }
-function invalidateBulk(){if(!triage.bulk)return;triage.bulk.revision=null;triage.bulk.blocked=false;$('#categorize-preview').hidden=true;$('#categorize-submit').textContent='Preview changes for all '+triage.bulk.ids.length;$('#categorize-submit').disabled=false;$('.form-error',$('#categorize-form')).hidden=true;}
+function invalidateBulk(keepIssues=false){
+  if(!triage.bulk)return;
+  triage.bulk.revision=null;triage.bulk.blocked=false;if(!keepIssues)triage.bulk.issues=[];
+  $('#categorize-preview').hidden=true;$('#categorize-submit').textContent='Preview '+triage.bulk.ids.length+' selected transactions';
+  $('.form-error',$('#categorize-form')).hidden=true;syncBatchScope('category');
+}
 function bulkPreviewMarkup(plan){
-  return '<div class="batch-summary"><div><span>Rows to change</span><strong>'+plan.applicableCount+' / '+plan.selectedCount+'</strong></div><div><span>Combined activity</span><strong>'+money(plan.amountCents)+'</strong></div></div><p><strong>Accounts:</strong> '+e(plan.accounts.join(', ')||'—')+'<br><strong>Business books:</strong> '+e(plan.businesses.join(', ')||'—')+'</p>'+(plan.newCategories.length?'<p>New categories: '+plan.newCategories.map(c=>e(c.name)+' ('+e(businessName(c.businessId))+')').join(', ')+'</p>':'')+(plan.exceptionCount?'<div class="callout"><p><strong>'+plan.exceptionCount+' rows need attention. No changes will be saved.</strong></p></div>'+plan.exceptions.slice(0,10).map(r=>'<p>'+e(r.description)+' — '+e(r.reason)+'</p>').join(''):'')+'<div class="quick-preview-table"><table><thead><tr><th>Transaction</th><th>Category</th><th>Business / result</th></tr></thead><tbody>'+plan.rows.map(r=>'<tr><td>'+e(r.description)+'<small>'+e(r.date)+' · '+money(r.amountCents)+'</small>'+'<small>'+e(r.reason.split('; rule IDs:')[0])+'</small>'+'</td><td>'+e(r.old.category_name)+' → <strong>'+e(r.new.category_name)+'</strong></td><td>'+e(businessName(r.new.business_id))+'<small>'+e(r.new.status==='approved'?'Reviewed':r.new.status==='suggested'?'Suggested':'Needs review')+' · '+(r.new.include_in_totals?'Included in totals':'Outside totals')+'</small></td></tr>').join('')+'</tbody></table></div><p class="field-hint">Showing '+plan.rows.length+' of '+plan.applicableCount+' proposed changes. '+(triage.bulk.mode==='suggestions'?'Suggestions remain unapproved.':'Only the selected rows will change.')+' Every saved change can be undone in Data & storage.</p>';
+  const attention=plan.exceptionCount?'<section class="batch-attention"><h3>'+plan.exceptionCount+' selected rows need attention</h3><p>Review a flagged transaction or leave it out of this batch, then preview again.</p><button type="button" class="button button-secondary" data-batch-omit-attention="category">Leave all '+plan.exceptionCount+' flagged rows out</button><div class="batch-attention-list">'+plan.exceptions.map(r=>{
+    const t=state.transactions.find(t=>t.id===r.id),credit=t?.direction==='credit'||t?.creditTreatment==='payment'&&t?.relatedTransactionId;
+    return '<article class="batch-attention-row"><strong>'+e(r.description)+'</strong><p>'+e(r.reason)+'</p><div><button type="button" class="text-button" data-batch-fix="category" data-row-id="'+e(r.id)+'">Review transaction</button>'+(credit?'<button type="button" class="text-button" data-batch-review-credit data-row-id="'+e(r.id)+'">Handle credit separately</button>':'')+'<button type="button" class="text-button" data-batch-omit="category" data-row-id="'+e(r.id)+'">Leave out of this batch</button></div>'+(credit?'<small>Handling it separately also leaves this row out of the category batch.</small>':'')+'</article>';
+  }).join('')+'</div></section>':'';
+  return '<div class="batch-summary"><div><span>Rows ready / selected</span><strong>'+plan.applicableCount+' / '+plan.selectedCount+'</strong></div><div><span>Combined ready activity</span><strong>'+money(plan.amountCents)+'</strong></div></div><p><strong>Accounts:</strong> '+e(plan.accounts.join(', ')||'—')+'<br><strong>Business books:</strong> '+e(plan.businesses.join(', ')||'—')+'</p>'+(plan.newCategories.length?'<p>New categories: '+plan.newCategories.map(c=>e(c.name)+' ('+e(businessName(c.businessId))+')').join(', ')+'</p>':'')+attention+'<div class="quick-preview-table"><table><thead><tr><th>Transaction</th><th>Category</th><th>Business / result</th></tr></thead><tbody>'+plan.rows.map(r=>'<tr><td>'+e(r.description)+'<small>'+e(r.date)+' · '+money(r.amountCents)+'</small><small>'+e(r.reason.split('; rule IDs:')[0])+'</small></td><td>'+e(r.old.category_name)+' → <strong>'+e(r.new.category_name)+'</strong></td><td>'+e(businessName(r.new.business_id))+'<small>'+e(r.new.status==='approved'?'Reviewed':r.new.status==='suggested'?'Suggested':'Needs review')+' · '+(r.new.include_in_totals?'Included in totals':'Outside totals')+'</small></td></tr>').join('')+'</tbody></table></div><p class="field-hint">Showing '+plan.rows.length+' of '+plan.applicableCount+' proposed changes. '+(plan.exceptionCount?'Resolve or leave out every flagged row before applying.':'Only the checked rows will change.')+' Every saved change can be undone in Data & storage.</p>';
 }
 
 function renderRuleList(){
@@ -176,12 +186,23 @@ document.addEventListener('keydown',event=>{
 // This file loads before app.js defines its shared helpers. Register directly
 // against the DOM; helpers are available by the time the user submits a form.
 document.querySelector('#categorize-form').addEventListener('submit',async event=>{
-  event.preventDefault();const form=event.currentTarget,button=$('#categorize-submit'),payload=bulkPayload();busy(form,true);
+  event.preventDefault();const form=event.currentTarget,button=$('#categorize-submit'),batch=triage.bulk;
+  if(!batch||!batch.ids.length||batch.busy)return;
+  const payload=bulkPayload();setBatchBusy('category',true);
   try{
-    if(!triage.bulk.revision){const plan=await post('/api/categorization/preview',payload);triage.bulk.revision=plan.revision;$('#categorize-preview').innerHTML=bulkPreviewMarkup(plan);$('#categorize-preview').hidden=false;button.textContent=triage.bulk.mode==='suggestions'?'Apply suggestions':'Apply to all '+plan.applicableCount+' transactions';triage.bulk.blocked=!!plan.exceptionCount||!plan.applicableCount;}
-    else{const saved=await post('/api/categorization/apply',{...payload,revision:triage.bulk.revision});state.selected.clear();$('#categorize-dialog').close();await loadData({quiet:true});toast(saved.count+' transactions categorized as '+(triage.bulk.mode==='categorize'?payload.category:'suggested')+'. Undo is available in Data & storage.');}
-  }catch(error){triage.bulk.revision=null;button.textContent='Preview changes';triage.bulk.blocked=false;showError(form,error);}finally{busy(form,false);if($('#categorize-dialog').open&&triage.bulk.blocked)button.disabled=true;}
+    if(!batch.revision){
+      const plan=await post('/api/categorization/preview',payload);batch.revision=plan.revision;batch.issues=plan.exceptions;
+      batch.blocked=!!plan.exceptionCount||!plan.applicableCount;renderBatchScope('category');
+      $('#categorize-preview').innerHTML=bulkPreviewMarkup(plan);$('#categorize-preview').hidden=false;
+      button.textContent=batch.blocked?'Resolve flagged rows to continue':batch.mode==='suggestions'?'Apply selected suggestions':'Apply to '+plan.applicableCount+' selected transactions';
+    }else{
+      const saved=await post('/api/categorization/apply',{...payload,revision:batch.revision});state.selected.clear();$('#categorize-dialog').close();
+      await loadData({quiet:true});toast(saved.count+' checked transactions categorized as '+(batch.mode==='categorize'?payload.category:'suggested')+'. Undo is available in Data & storage.');
+    }
+  }catch(error){batch.revision=null;button.textContent='Preview selected transactions';batch.blocked=false;showError(form,error);}
+  finally{setBatchBusy('category',false);}
 });
+
 document.querySelector('#rule-editor-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget,payload=rulePayload();busy(form,true);
   try{

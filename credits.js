@@ -47,11 +47,12 @@ function openCreditDecision(ids){
   if(!rows.length||rows.some(t=>t.direction!=='credit')){toast('Select money-in credits separately from charges.');return;}
   if(rows.length>5000){toast('Narrow this set to at most 5,000 credits.');return;}
   creditView.bulk={ids:rows.map(t=>t.id),revision:null,candidates:[],linkRequest:0};
+  initializeBatchSelection(creditView.bulk,rows.map(t=>t.id));
   const form=$('#credit-form');form.reset();$('#credit-preview').hidden=true;$('#credit-preview').innerHTML='';$('#credit-submit').textContent='Preview credit decision';
   $('#credit-title').textContent='One decision for '+rows.length+' credit'+(rows.length===1?'':'s')+'.';
   $('#credit-description').textContent=money(rows.reduce((n,t)=>n+t.amountCents,0))+' in money-in activity. Compare the selected rows, preview the reporting effect, then apply.';
   $('#credit-scope-summary').textContent='See all '+rows.length+' selected credits';
-  $('#credit-scope').innerHTML='<table><thead><tr><th>Credit / source account</th><th>Date / amount</th><th>Current decision</th></tr></thead><tbody>'+rows.map(t=>'<tr><td>'+e(t.description)+'<small>'+e(t.account)+'</small></td><td>'+e(t.date)+'<small>'+money(t.amountCents)+'</small></td><td>'+e(creditDecisionText(t))+'</td></tr>').join('')+'</tbody></table>';
+
   const decisions=[...new Set(rows.map(t=>t.creditTreatment||''))],suggestions=rows.map(creditSuggestion),sharedSuggestion=suggestions[0]&&!suggestions[0].conflict&&suggestions.every(s=>s&&!s.conflict&&s.treatment===suggestions[0].treatment&&s.businessId===suggestions[0].businessId&&s.category===suggestions[0].category)?suggestions[0]:null;
   const treatment=decisions.length===1&&decisions[0]?decisions[0]:sharedSuggestion?.treatment||'__choose__';
   $('#credit-treatment').value=treatment;
@@ -63,7 +64,7 @@ function openCreditDecision(ids){
   const description=rows[0].merchant||rows[0].description;$('#credit-rule-pattern').value=description.length<=120&&rows.every(t=>(t.merchant||t.description)===description)?description:'';
   $('#credit-related').innerHTML='<option value="">No linked transaction</option>';
   $('#credit-unlink').hidden=rows.length!==1||!rows[0].relatedTransactionId;
-  showDialog('credit-dialog');syncCreditDecision();loadCreditCandidates(rows.length===1?rows[0].relatedTransactionId:null);
+  renderBatchScope('credit');showDialog('credit-dialog');syncCreditDecision();loadCreditCandidates(rows.length===1?rows[0].relatedTransactionId:null);
 }
 function syncCreditDecision(){
   const treatment=$('#credit-treatment').value,refund=treatment==='refund',business=refund&&$('#credit-refund-usage').value==='business';
@@ -76,7 +77,7 @@ function syncCreditDecision(){
   const remember=$('#credit-remember-rule').checked&&!!treatment&&treatment!=='__choose__';
   $('#credit-rule-pattern').disabled=!remember;$('#credit-rule-account').disabled=!remember;$('#credit-rule-pattern').required=remember;$('#credit-rule-account').required=remember;
 }
-function invalidateCredit(){if(!creditView.bulk)return;creditView.bulk.revision=null;$('#credit-preview').hidden=true;$('#credit-submit').textContent='Preview credit decision';$('.form-error',$('#credit-form')).hidden=true;}
+function invalidateCredit(){if(!creditView.bulk)return;creditView.bulk.revision=null;$('#credit-preview').hidden=true;$('#credit-submit').textContent='Preview '+creditView.bulk.ids.length+' selected credits';$('.form-error',$('#credit-form')).hidden=true;syncBatchScope('credit');}
 async function loadCreditCandidates(selected=null){
   const bulk=creditView.bulk,treatment=$('#credit-treatment').value;if(!bulk||bulk.ids.length!==1||!['payment','refund'].includes(treatment))return;
   const request=++bulk.linkRequest;bulk.linkLoading=true;$('#credit-related').disabled=true;$('#credit-related-reason').textContent='Finding possible matches…';
@@ -105,7 +106,7 @@ function renderCreditRules(){
 document.addEventListener('click',async event=>{
   const el=event.target;
   if(el.closest('[data-review-selected-credits]')){openCreditDecision(state.transactions.filter(t=>state.selected.has(t.id)&&t.direction==='credit').map(t=>t.id));return;}
-  const editor=el.closest('[data-editor-credit]');if(editor){event.stopImmediatePropagation();$('#transaction-dialog').close();if(editor.dataset.editorCredit)openCreditDecision([editor.dataset.editorCredit]);else navigate('credits');return;}
+  const editor=el.closest('[data-editor-credit]');if(editor){event.stopImmediatePropagation();if(routeEditorCreditFromBatch(editor.dataset.editorCredit))return;$('#transaction-dialog').close();if(editor.dataset.editorCredit)openCreditDecision([editor.dataset.editorCredit]);else navigate('credits');return;}
   const listed=el.closest('[data-review-listed-credits]');if(listed){openCreditDecision(filteredLedger().filter(t=>t.direction==='credit').map(t=>t.id));return;}
   const quickGroup=el.closest('[data-review-group-credits]');if(quickGroup){openCreditDecision(triage.groups[Number(quickGroup.dataset.reviewGroupCredits)][1].filter(t=>t.direction==='credit').map(t=>t.id));return;}
   const decide=el.closest('[data-credit-decide]');if(decide){event.stopImmediatePropagation();openCreditDecision([decide.dataset.creditDecide]);return;}
@@ -125,7 +126,7 @@ document.addEventListener('change',event=>{
   if(el.matches('[data-credit-select]')){el.checked?creditView.selected.add(el.dataset.creditSelect):creditView.selected.delete(el.dataset.creditSelect);refreshCreditResults();}
   if(el.matches('[data-credit-group-select]')){creditView.groups[Number(el.dataset.creditGroupSelect)].forEach(t=>el.checked?creditView.selected.add(t.id):creditView.selected.delete(t.id));refreshCreditResults();}
   if(el.id==='credit-account'){creditView.account=el.value;creditView.selected.clear();refreshCreditResults();}
-  if(el.closest('#credit-form')){
+  if(el.closest('#credit-form')&&!el.matches('[data-batch-row-select],[data-batch-select-all]')){
     invalidateCredit();
     if(el.id==='credit-treatment'){$('#credit-related-search').value='';if(creditView.bulk){creditView.bulk.linkRequest++;creditView.bulk.linkLoading=false;}$('#credit-related').innerHTML='<option value="">No linked transaction</option>';loadCreditCandidates();}
     if(el.id==='credit-business')creditCategoryOptions();
@@ -136,14 +137,15 @@ document.addEventListener('change',event=>{
     syncCreditDecision();
   }
 });
-document.addEventListener('input',event=>{if(event.target.id==='credit-search'){creditView.query=event.target.value;creditView.selected.clear();refreshCreditResults();}if(event.target.closest('#credit-form'))invalidateCredit();if(event.target.id==='credit-related-search'){clearTimeout(creditView.searchTimer);creditView.searchTimer=setTimeout(()=>loadCreditCandidates($('#credit-related').value),250);}});
+document.addEventListener('input',event=>{if(event.target.id==='credit-search'){creditView.query=event.target.value;creditView.selected.clear();refreshCreditResults();}if(event.target.closest('#credit-form')&&!event.target.matches('[data-batch-row-select],[data-batch-select-all]'))invalidateCredit();if(event.target.id==='credit-related-search'){clearTimeout(creditView.searchTimer);creditView.searchTimer=setTimeout(()=>loadCreditCandidates($('#credit-related').value),250);}});
 document.querySelector('#credit-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget,bulk=creditView.bulk;if(!bulk)return;
+  if(!bulk.ids.length||bulk.busy)return;
   if(bulk.linkLoading){showError(form,new Error('Wait for related transaction matches to finish loading.'));return;}
-  busy(form,true);
+  const body=creditPayload();setBatchBusy('credit',true);
   try{
-    const body=creditPayload();if(body.treatment==='__choose__')throw new Error('Choose a credit decision before previewing.');
+    if(body.treatment==='__choose__')throw new Error('Choose a credit decision before previewing.');
     if(bulk.revision){await post('/api/credits/apply',{...body,revision:bulk.revision});$('#credit-dialog').close();creditView.selected.clear();state.selected.clear();await loadData({quiet:true});toast('Credit decision saved. Find it in All money in or undo it in Data & storage.');}
     else{const plan=await post('/api/credits/preview',body);bulk.revision=plan.revision;$('#credit-preview').innerHTML=creditPreviewMarkup(plan);$('#credit-preview').hidden=false;$('#credit-submit').textContent='Apply decision to '+plan.affectedCount+' row'+(plan.affectedCount===1?'':'s');$('#credit-preview').scrollIntoView({block:'nearest',behavior:'smooth'});}
-  }catch(error){bulk.revision=null;$('#credit-submit').textContent='Preview credit decision';showError(form,error);}finally{busy(form,false);}
+  }catch(error){bulk.revision=null;$('#credit-submit').textContent='Preview credit decision';showError(form,error);}finally{setBatchBusy('credit',false);}
 });
