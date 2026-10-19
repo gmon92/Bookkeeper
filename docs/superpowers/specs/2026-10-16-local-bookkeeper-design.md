@@ -223,12 +223,34 @@ Initial categories should cover fuel, vehicle maintenance, tires, insurance, reg
 
 - `id`
 - `transaction_id`
+- `action_id` nullable
 - `field_name`
 - `old_value`
 - `new_value`
 - `action`
 - `reason`
 - `changed_at`
+
+### `review_actions`
+
+- `id`
+- `action_type`
+- `description`
+- `created_at`
+- `status` (`active`, `undone`, or `partially_undone`)
+
+Action types include `batch_approve`, `batch_categorize`, `batch_assign_business`, `batch_exclude`, `batch_mark_personal`, `batch_mark_duplicate`, and `undo`.
+
+### `review_action_items`
+
+- `id`
+- `action_id`
+- `transaction_id`
+- `old_state`
+- `new_state`
+- `outcome`
+
+`old_state` and `new_state` capture the fields changed by the action. This allows a batch action to be reversed without deleting the audit trail.
 
 ## 9. Statuses and review behavior
 
@@ -245,7 +267,9 @@ Initial statuses:
 
 Suggestions are never approvals. Every suggestion should display its reason, such as a prior approved merchant/account mapping or keyword rule.
 
-Batch groups should be based on normalized merchant, source account, proposed business, proposed category, and confidence. Before applying a batch action, show affected-row count, total amount, accounts, businesses, proposed changes, and exceptions. Record the batch action in history and provide undo.
+Batch groups should be based on normalized merchant, source account, proposed business, proposed category, and confidence. Before applying a batch action, show affected-row count, total amount, accounts, businesses, proposed changes, and exceptions. Record the batch action in `review_actions`, record each transaction's old and new state in `review_action_items`, and link field-level changes through `transaction_history.action_id`.
+
+Undo must create a new reversal action rather than deleting history. The app should compare each transaction's current state with the state produced by the original action. Safely reversible rows may be undone; rows changed afterward must be reported as conflicts and left for manual review. The original action status becomes `undone` or `partially_undone`.
 
 Rules learned from corrections must be scoped and previewable. The app must not silently apply a new correction to historical transactions.
 
