@@ -149,7 +149,7 @@ Open the **Rules & automation** sidebar tab to manage expense and credit rules
 in one place. Existing saved rules retain their destinations and begin in
 **Suggest only** mode.
 
-- Create rules from any category card, or choose **Create rule**. Add up to 30
+- Create rules from any category card, or choose **Create rule**. Add up to 200
   merchant phrases (one per line; any phrase can match), an exact original
   statement category, source account and optional USD amount bounds. All other
   supplied conditions must match together. Expense rules match money out; credit
@@ -172,6 +172,19 @@ in one place. Existing saved rules retain their destinations and begin in
   setting when their automation levels differ.
 - **Rule ideas** are generated from at least two consistent reviewed decisions
   for a merchant/account. Review and save each idea yourself before it can run.
+- **Combine rule ideas by category** collects store ideas for the same category,
+  business and source account. Choose a Meals, Fuel or other group, then check
+  the stores to accept together. Search the list, select all shown stores, leave
+  individual stores out, or clear the selection. The summary counts selected
+  stores and their reviewed transactions. Search keeps selections outside the
+  visible results. Different businesses, source accounts and credit treatments
+  remain separate groups, available in the picker's dropdown.
+- **Continue with selected stores** opens one rule with the checked merchant
+  phrases and the group's category, business and account already filled in.
+  Choose automation, preview and save to accept them as a single rule. **Back to
+  store picker** preserves the selection for changes. Up to 200 merchant phrases
+  fit in one rule; saving does not modify existing transactions. All available
+  ideas are shown, rather than a global top-50 list.
 - Each confirmed import shows categorized, automatically reviewed, suggestion,
   conflict, unmatched and attention counts. Open each result group to inspect its
   rows. **Imports → Automation results** reopens the historical summary.

@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 import source_archive
 
 MODES = ('suggest', 'categorize', 'review')
+MAX_RULE_PHRASES = 200
 
 
 def initialize(db):
@@ -121,8 +122,8 @@ def values(db, body):
     mode = body.get('mode', 'suggest')
     if mode not in MODES: raise ValueError('Choose a valid automation level.')
     patterns = body.get('patterns', [])
-    if not isinstance(patterns, list) or len(patterns)>30 or any(not isinstance(p,str) or not 2<=len(text(p))<=120 for p in patterns):
-        raise ValueError('Enter up to 30 merchant phrases, each between 2 and 120 characters.')
+    if not isinstance(patterns, list) or len(patterns)>MAX_RULE_PHRASES or any(not isinstance(p,str) or not 2<=len(text(p))<=120 for p in patterns):
+        raise ValueError('Enter up to '+str(MAX_RULE_PHRASES)+' merchant phrases, each between 2 and 120 characters.')
     patterns = list(dict.fromkeys(p.strip() for p in patterns))
     source = body.get('sourceCategory', '')
     if not isinstance(source,str) or len(source)>200: raise ValueError('Original category must be at most 200 characters.')
@@ -186,7 +187,7 @@ def rule_preview(db, body):
 def overview(db):
     saved, existing = all_rules(db), rows(db)
     return {'rules':[r|{'conditions':conditions(r),'matchCount':sum(matches(t,r|{'active':1}) for t in existing)} for r in saved],
-            'proposals':proposals(existing, saved),
+            'proposals':proposals(existing, saved),'maxPatterns':MAX_RULE_PHRASES,
             'actionStatuses':{r['id']:r['status'] for r in db.execute("SELECT id,status FROM review_actions WHERE action_type='automation'")}}
 
 
@@ -207,11 +208,11 @@ def proposals(existing, saved):
         if len(targets)!=1: continue
         row,treatment=items[0]
         if any(matches(row,r) for r in saved): continue
-        phrase=row['merchant'].strip()
+        phrase=' '.join(row['merchant'].split())
         if not 2<=len(text(phrase))<=120: continue
         result.append({'type':'credit' if treatment else 'expense','patterns':[phrase],'accountId':row['account_id'],
             'businessId':row['business_id'],'category':row['category_name'],'treatment':treatment,'count':len(items)})
-    return sorted(result,key=lambda r:-r['count'])[:50]
+    return sorted(result,key=lambda r:(-r['count'],r['category'],r['patterns'][0]))
 
 
 def plan(db, handler, ids=None):
