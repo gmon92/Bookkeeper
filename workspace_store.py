@@ -163,11 +163,15 @@ def validate_existing(directory):
 
 
 def default_directory():
+    if os.environ.get('LOCAL_BOOKKEEPER_BOOKS_DIR'):
+        return absolute_path(os.environ['LOCAL_BOOKKEEPER_BOOKS_DIR'])
     documents = Path.home()/'Documents'
     return (documents if documents.is_dir() else Path.home())/'Local Bookkeeper Books'
 
 
 def choose_directory(initial='', kind='directory'):
+    if os.environ.get('LOCAL_BOOKKEEPER_STORAGE_ROOT'):
+        raise ValueError('Enter a container path inside '+os.environ['LOCAL_BOOKKEEPER_STORAGE_ROOT']+'. Native file pickers are unavailable in Docker.')
     # A separate main-thread GUI process keeps the local HTTP server responsive.
     try:
         result = subprocess.run([sys.executable,str(Path(__file__).resolve()),'browse',initial,kind],

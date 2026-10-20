@@ -13,3 +13,6 @@ Test docs/
 .venv/
 .pytest_cache/
 outputs/
+.env
+.env.*
+!.env.example

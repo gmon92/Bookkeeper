@@ -1,0 +1,30 @@
+# Allow only runtime sources into the build context. Books and private documents
+# stay outside it, including files added to the repository folder in the future.
+**
+!Dockerfile
+!requirements.txt
+!server.py
+!workspace_store.py
+!statement_import.py
+!reports.py
+!backup.py
+!categorization.py
+!credits.py
+!source_archive.py
+!import_evidence.py
+!automation.py
+!index.html
+!app.js
+!profile_ui.js
+!setup.js
+!batch_selection.js
+!categorize.js
+!source.js
+!credits.js
+!automation.js
+!styles.css
+!setup.css
+!categorize.css
+!source.css
+!credits.css
+!automation.css

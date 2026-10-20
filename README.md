@@ -6,6 +6,13 @@ listens on `127.0.0.1`; normal processing does not use a cloud service.
 
 ## Setup and run
 
+For Docker, run `docker compose up -d --build`, then open
+<http://127.0.0.1:8766/>. Profiles and settings persist in a volume. See the
+[Docker setup guide](docs/docker.md) for existing profiles, host-folder storage,
+ports and updates.
+
+### Native Python setup
+
 Python 3.11 or later is required. From PowerShell in the project folder:
 
 ```powershell
@@ -283,6 +290,12 @@ returns to setup instead of creating an empty replacement. `LOCAL_BOOKKEEPER_CON
 can override this preference-file path. `LOCAL_BOOKKEEPER_DATA` is recognized as a
 legacy location to offer during setup; saved user preferences take precedence.
 `LOCAL_BOOKKEEPER_PORT` changes the local HTTP port.
+`LOCAL_BOOKKEEPER_HOST` changes the bind address (native default `127.0.0.1`).
+`LOCAL_BOOKKEEPER_ALLOWED_HOSTS` adds explicit comma-separated `host:port`
+addresses when a container port mapping uses a different browser port. Requests
+with an Origin must match the request's Host. `LOCAL_BOOKKEEPER_BOOKS_DIR` changes
+the suggested new-profile location. Docker sets `LOCAL_BOOKKEEPER_STORAGE_ROOT`
+to keep new profiles on its persistent volume.
 
 No financial data or absolute personal location is stored in the source repository.
 Switching books is serialized with database requests. Write requests identify the

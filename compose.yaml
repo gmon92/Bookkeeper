@@ -1,0 +1,18 @@
+name: local-bookkeeper
+
+services:
+  bookkeeper:
+    build: .
+    image: local-bookkeeper:local
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${BOOKKEEPER_PORT:-8766}:8765"
+    environment:
+      LOCAL_BOOKKEEPER_ALLOWED_HOSTS: "127.0.0.1:${BOOKKEEPER_PORT:-8766},localhost:${BOOKKEEPER_PORT:-8766}"
+    volumes:
+      - bookkeeper_data:/data
+    stop_grace_period: 20s
+
+volumes:
+  bookkeeper_data:

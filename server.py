@@ -34,8 +34,17 @@ DEFAULT_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local-boo
 DATA_DIR = Path(os.environ.get("LOCAL_BOOKKEEPER_DATA", DEFAULT_DATA_DIR)).resolve()
 DOCS_DIR = DATA_DIR / "documents"
 DB_PATH = DATA_DIR / "bookkeeper.sqlite3"
-HOST = "127.0.0.1"
+HOST = os.environ.get('LOCAL_BOOKKEEPER_HOST','127.0.0.1')
 PORT = int(os.environ.get("LOCAL_BOOKKEEPER_PORT", "8765"))
+EXTRA_ALLOWED_HOSTS = set()
+for authority in os.environ.get('LOCAL_BOOKKEEPER_ALLOWED_HOSTS','').split(','):
+    authority=authority.strip().lower()
+    if not authority:continue
+    parsed=urlparse('http://'+authority)
+    try:valid=parsed.hostname and parsed.port and not (parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment or '*' in authority)
+    except ValueError:valid=False
+    if not valid:raise ValueError('LOCAL_BOOKKEEPER_ALLOWED_HOSTS must contain comma-separated host:port entries without URLs or wildcards.')
+    EXTRA_ALLOWED_HOSTS.add(authority)
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 STAGING_LOCK = threading.Lock()
 WORKSPACE_LOCK = threading.RLock()
@@ -230,13 +239,18 @@ def setup_status():
     return {'configured':WORKSPACE_READY,'directory':str(DATA_DIR) if WORKSPACE_READY else None,
             'defaultDirectory':str(workspace_store.default_directory()),'existingDirectories':candidates,
             'error':SETUP_ERROR,'applicationDirectory':str(ROOT),'profile':active_profile(),
-            'recentProfiles':preferences.get('recentProfiles',[])}
+            'recentProfiles':preferences.get('recentProfiles',[]),
+            'containerStorage':os.environ.get('LOCAL_BOOKKEEPER_STORAGE_ROOT'),
+            'nativePickerAvailable':not bool(os.environ.get('LOCAL_BOOKKEEPER_STORAGE_ROOT'))}
 
 
 def configure_workspace(body):
     mode = body.get('mode')
     if mode not in {'create','open','copy','restore'}: raise ValueError('Choose create, open, copy or restore a profile.')
     directory = workspace_store.directory_path(body.get('directory')) if mode!='open' else None
+    storage=os.environ.get('LOCAL_BOOKKEEPER_STORAGE_ROOT')
+    if directory and storage and not directory.is_relative_to(Path(storage).resolve()):
+        raise ValueError('Choose a profile destination inside '+storage+' so its data persists outside the container.')
     name=body.get('profileName') or None
     if name is not None and (not isinstance(name,str) or not name.strip() or len(name.strip())>100):raise ValueError('Enter a profile name up to 100 characters.')
     if mode in {'create','copy','restore'} and (directory==ROOT or directory.is_relative_to(ROOT)):
@@ -489,10 +503,10 @@ class Handler(SimpleHTTPRequestHandler):
         return body
 
     def local_request(self):
-        host = self.headers.get('Host', '')
-        allowed = {f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}'}
+        host = self.headers.get('Host', '').lower()
+        allowed = {f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}'} | EXTRA_ALLOWED_HOSTS
         origin = self.headers.get('Origin')
-        return host in allowed and (not origin or origin in {'http://' + value for value in allowed})
+        return host in allowed and (not origin or origin in {scheme+'://' + host for scheme in ('http','https')})
 
     def do_GET(self):
         try:
