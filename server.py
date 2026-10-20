@@ -42,6 +42,7 @@ WORKSPACE_LOCK = threading.RLock()
 WORKSPACE_READY = False
 WORKSPACE_ID = ''
 SETUP_ERROR = ''
+PROFILE_PATH = None
 
 BASE_CATEGORIES = [
     "Fuel", "Vehicle maintenance", "Tires", "Insurance", "Registration / taxes",
@@ -179,36 +180,66 @@ def initialize(initial_business=None) -> None:
         db.execute("PRAGMA user_version=8")
 
 
-def activate_workspace(directory, business=None, remember=False):
-    global DATA_DIR,DOCS_DIR,DB_PATH,WORKSPACE_READY,WORKSPACE_ID,SETUP_ERROR
-    previous = DATA_DIR,DOCS_DIR,DB_PATH,WORKSPACE_READY,WORKSPACE_ID
-    DATA_DIR,DOCS_DIR,DB_PATH = directory,directory/'documents',directory/'bookkeeper.sqlite3'
+def activate_workspace(directory, business=None, remember=False, database=None, profile=None, name=None):
+    global DATA_DIR,DOCS_DIR,DB_PATH,WORKSPACE_READY,WORKSPACE_ID,SETUP_ERROR,PROFILE_PATH
+    previous = DATA_DIR,DOCS_DIR,DB_PATH,WORKSPACE_READY,WORKSPACE_ID,PROFILE_PATH
+    DATA_DIR,DOCS_DIR,DB_PATH = directory,directory/'documents',database or directory/'bookkeeper.sqlite3'
     try:
         initialize(business)
         with connect() as db:
             workspace_id = db.execute("SELECT value FROM app_metadata WHERE key='workspace_id'").fetchone()[0]
-        if remember: workspace_store.save_preferences(directory)
+            PROFILE_PATH=workspace_store.save_profile(db,DB_PATH,name=name,path=profile)
+            profile_name=db.execute("SELECT value FROM app_metadata WHERE key='profile_name'").fetchone()[0]
+        if remember: workspace_store.save_preferences(directory,DB_PATH,PROFILE_PATH,profile_name)
         WORKSPACE_READY,WORKSPACE_ID,SETUP_ERROR = True,hashlib.sha256((workspace_id+'|'+str(DB_PATH)).encode()).hexdigest(),''
     except Exception:
-        DATA_DIR,DOCS_DIR,DB_PATH,WORKSPACE_READY,WORKSPACE_ID = previous
+        DATA_DIR,DOCS_DIR,DB_PATH,WORKSPACE_READY,WORKSPACE_ID,PROFILE_PATH = previous
         raise
+
+
+def active_profile():
+    if not WORKSPACE_READY:return None
+    with connect() as db:
+        return {'name':db.execute("SELECT value FROM app_metadata WHERE key='profile_name'").fetchone()[0],
+            'file':str(PROFILE_PATH),'database':str(DB_PATH),'directory':str(DATA_DIR),'settings':workspace_store.profile_settings(db),
+            'transactionCount':db.execute('SELECT count(*) FROM transactions').fetchone()[0],
+            'ruleCount':db.execute('SELECT (SELECT count(*) FROM merchant_rules)+(SELECT count(*) FROM credit_rules)').fetchone()[0]}
+
+
+def inspect_books(value):
+    location=workspace_store.locate_books(value)
+    workspace_store.validate_existing(str(location['database']))
+    db=sqlite3.connect(location['database'].as_uri()+'?mode=ro',uri=True)
+    try:
+        tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        name=db.execute("SELECT value FROM app_metadata WHERE key='profile_name'").fetchone() if 'app_metadata' in tables else None
+        return {'name':name[0] if name else location['directory'].name,'database':str(location['database']),
+            'profile':str(location['profile']) if location['profile'] else None,
+            'transactionCount':db.execute('SELECT count(*) FROM transactions').fetchone()[0],
+            'ruleCount':sum(db.execute('SELECT count(*) FROM '+t).fetchone()[0] for t in ('merchant_rules','credit_rules') if t in tables)}
+    finally:db.close()
 
 
 def setup_status():
     candidates = []
-    for path in (DATA_DIR,DEFAULT_DATA_DIR,ROOT/'data'):
+    preferences,_=workspace_store.load_preferences()
+    remembered=Path(preferences['directory']) if preferences.get('directory') else workspace_store.default_directory()
+    for path in (remembered,workspace_store.default_directory(),DATA_DIR,DEFAULT_DATA_DIR,ROOT/'data'):
         if (path/'bookkeeper.sqlite3').is_file() and str(path) not in candidates:
             candidates.append(str(path))
     return {'configured':WORKSPACE_READY,'directory':str(DATA_DIR) if WORKSPACE_READY else None,
             'defaultDirectory':str(workspace_store.default_directory()),'existingDirectories':candidates,
-            'error':SETUP_ERROR,'applicationDirectory':str(ROOT)}
+            'error':SETUP_ERROR,'applicationDirectory':str(ROOT),'profile':active_profile(),
+            'recentProfiles':preferences.get('recentProfiles',[])}
 
 
 def configure_workspace(body):
     mode = body.get('mode')
-    directory = workspace_store.directory_path(body.get('directory'))
-    if mode not in {'create','open','copy'}: raise ValueError('Choose create, open, or copy existing books.')
-    if mode in {'create','copy'} and (directory==ROOT or directory.is_relative_to(ROOT)):
+    if mode not in {'create','open','copy','restore'}: raise ValueError('Choose create, open, copy or restore a profile.')
+    directory = workspace_store.directory_path(body.get('directory')) if mode!='open' else None
+    name=body.get('profileName') or None
+    if name is not None and (not isinstance(name,str) or not name.strip() or len(name.strip())>100):raise ValueError('Enter a profile name up to 100 characters.')
+    if mode in {'create','copy','restore'} and (directory==ROOT or directory.is_relative_to(ROOT)):
         raise ValueError('Choose a books folder outside the app folder so updates and reinstalls keep your data separate.')
     if mode == 'create':
         name = body.get('businessName','')
@@ -222,20 +253,25 @@ def configure_workspace(body):
             with (directory/'bookkeeper.sqlite3').open('xb'): pass
         except FileExistsError as exc:
             raise ValueError('That folder already contains books. Choose Open existing books or another folder.') from exc
-        activate_workspace(directory,name.strip(),remember=True)
+        activate_workspace(directory,name.strip(),remember=True,name=body.get('profileName') or name.strip()[:100])
     elif mode == 'open':
-        workspace_store.validate_existing(directory)
-        activate_workspace(directory,remember=True)
+        location=workspace_store.locate_books(body.get('directory'))
+        workspace_store.validate_existing(str(location['database']))
+        activate_workspace(location['directory'],remember=True,database=location['database'],profile=location['profile'])
     else:
-        source = workspace_store.directory_path(body.get('sourceDirectory'))
-        workspace_store.validate_existing(source)
         if directory.exists() and any(directory.iterdir()): raise ValueError('Copy books into a new or empty folder. Existing files are never overwritten.')
-        content = create_backup(source/'bookkeeper.sqlite3',source)
-        with zipfile.ZipFile(io.BytesIO(content)) as archive:
-            if json.loads(archive.read('manifest.json'))['missingSources']:
-                raise ValueError('Some retained originals are missing. Restore them before copying the books, or open the existing folder.')
-        restore_backup(io.BytesIO(content),directory,allow_empty=True)
-        activate_workspace(directory,remember=True)
+        if mode=='restore':
+            source=workspace_store.absolute_path(body.get('sourceDirectory'))
+            restore_backup(source,directory,allow_empty=True)
+        else:
+            source=workspace_store.locate_books(body.get('sourceDirectory'))
+            workspace_store.validate_existing(str(source['database']))
+            content = create_backup(source['database'],source['directory'])
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                if json.loads(archive.read('manifest.json'))['missingSources']:
+                    raise ValueError('Some retained originals are missing. Open the existing profile to use its SQLite source archive, or recover the files before copying.')
+            restore_backup(io.BytesIO(content),directory,allow_empty=True)
+        activate_workspace(directory,remember=True,name=name)
     return {'ok':True,'directory':str(DATA_DIR),'database':str(DB_PATH),'workspaceId':WORKSPACE_ID}
 
 
@@ -475,7 +511,7 @@ class Handler(SimpleHTTPRequestHandler):
         path = unquote(urlparse(self.path).path)
         if path == "/api/health":
             return self.send_json(200, {"ok": True, "setupRequired":not WORKSPACE_READY,'workspaceId':WORKSPACE_ID,
-                "database":str(DB_PATH) if WORKSPACE_READY else None,"dataDirectory":str(DATA_DIR) if WORKSPACE_READY else None,'setup':setup_status()})
+                "database":str(DB_PATH) if WORKSPACE_READY else None,"dataDirectory":str(DATA_DIR) if WORKSPACE_READY else None,'setup':setup_status(),'profile':active_profile()})
         if path == '/api/setup':
             return self.send_json(200,setup_status())
         if path.startswith('/api/') and not WORKSPACE_READY:
@@ -538,13 +574,30 @@ class Handler(SimpleHTTPRequestHandler):
             return self.export_excel()
         if path == "/api/export.csv":
             return self.export_csv()
-        if path in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/automation.css'}:
+        if path in {'/','/index.html'}:return self.serve_interface()
+        if path in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/automation.css','/profile_ui.js'}:
             return super().do_GET()
         return self.send_error(404)
 
+    def serve_interface(self, head=False):
+        source=(ROOT/'index.html').read_text(encoding='utf-8')
+        def versioned(match):
+            asset=ROOT/match[2]
+            digest=hashlib.sha256(asset.read_bytes()).hexdigest()[:16]
+            return match[1]+'="'+match[2]+'?v='+digest+'"'
+        source=re.sub(r'(src|href)="([A-Za-z_][A-Za-z0-9_.-]*\.(?:js|css))"',versioned,source)
+        data=source.encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type','text/html; charset=utf-8')
+        self.send_header('Content-Length',str(len(data)))
+        self.send_header('Cache-Control','no-store')
+        self.end_headers()
+        if not head:self.wfile.write(data)
+
     def do_HEAD(self):
         # SimpleHTTPRequestHandler otherwise allows HEAD to bypass GET's allowlist.
-        if self.local_request() and unquote(urlparse(self.path).path) in {'/', '/index.html', '/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/automation.css'}:
+        if self.local_request() and unquote(urlparse(self.path).path) in {'/','/index.html'}:return self.serve_interface(head=True)
+        if self.local_request() and unquote(urlparse(self.path).path) in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/automation.css','/profile_ui.js'}:
             return super().do_HEAD()
         return self.send_error(404)
 
@@ -554,7 +607,9 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path == '/api/setup/browse':
             try:
                 body = self.read_json()
-                return self.send_json(200,{'directory':workspace_store.choose_directory(str(body.get('initial','')))})
+                kind=body.get('kind','directory')
+                if kind not in ('directory','file','backup'):raise ValueError('Choose a folder, database/profile file or backup.')
+                return self.send_json(200,{'directory':workspace_store.choose_directory(str(body.get('initial','')),kind)})
             except (ValueError,OSError) as exc:
                 return self.send_json(400,{'error':str(exc)})
         with WORKSPACE_LOCK:
@@ -567,10 +622,21 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             if path == '/api/setup':
                 return self.send_json(200,configure_workspace(self.read_json()))
+            if path == '/api/setup/inspect':
+                return self.send_json(200,inspect_books(self.read_json().get('path')))
             if not WORKSPACE_READY:
                 return self.send_json(409,{'error':'Choose or create your books folder to begin.'})
             if self.headers.get('X-Bookkeeper-Workspace') != WORKSPACE_ID:
                 return self.send_json(409,{'error':'The active database changed or this page is out of date. Refresh before saving changes.'})
+            if path == '/api/profile/settings':
+                with connect() as db:settings=workspace_store.save_profile_settings(db,self.read_json())
+                return self.send_json(200,{'settings':settings})
+            if path == '/api/profile/name':
+                body=self.read_json()
+                with connect() as db:workspace_store.save_profile(db,DB_PATH,name=body.get('name'),path=PROFILE_PATH)
+                profile=active_profile()
+                workspace_store.save_preferences(DATA_DIR,DB_PATH,PROFILE_PATH,profile['name'])
+                return self.send_json(200,{'profile':profile})
             if path == '/api/import-profiles/revoke':
                 body = self.read_json()
                 with connect() as db: db.execute('UPDATE import_profiles SET active=0 WHERE id=?',(body.get('id'),))
@@ -1047,9 +1113,9 @@ def main() -> None:
     SETUP_ERROR = error
     if preferences:
         try:
-            directory = workspace_store.directory_path(preferences['directory'])
-            workspace_store.validate_existing(directory)
-            activate_workspace(directory)
+            location=workspace_store.locate_books(preferences.get('profile') or preferences.get('database') or preferences['directory'])
+            workspace_store.validate_existing(str(location['database']))
+            activate_workspace(location['directory'],remember=True,database=location['database'],profile=location['profile'])
         except (ValueError,OSError,sqlite3.Error) as exc:
             SETUP_ERROR = str(exc)
     server = LocalHTTPServer((HOST, PORT), Handler)

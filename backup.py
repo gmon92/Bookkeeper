@@ -12,6 +12,7 @@ import tempfile
 from contextlib import closing
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
+import workspace_store
 
 
 def create_backup(database_path, data_directory):
@@ -24,11 +25,15 @@ def create_backup(database_path, data_directory):
                 destination.execute('DELETE FROM staged_imports')
             destination.commit()
             paths = [r[0] for r in destination.execute('SELECT stored_path FROM documents')]
+            profile=workspace_store.profile_document(destination,'bookkeeper.sqlite3')
         manifest = {'version':1,'files':{},'missingSources':[]}
         with ZipFile(result,'w',ZIP_DEFLATED) as archive:
             content = copy.read_bytes()
             archive.writestr('bookkeeper.sqlite3',content)
             manifest['files']['bookkeeper.sqlite3'] = hashlib.sha256(content).hexdigest()
+            profile_bytes=json.dumps(profile,indent=2).encode('utf-8')
+            archive.writestr('bookkeeper.profile.json',profile_bytes)
+            manifest['files']['bookkeeper.profile.json']=hashlib.sha256(profile_bytes).hexdigest()
             for relative in sorted(set(paths)):
                 path = (Path(data_directory)/relative).resolve()
                 if not path.is_relative_to(Path(data_directory).resolve() / 'documents'):
@@ -58,8 +63,11 @@ def restore_backup(archive_path, target_directory, allow_empty=False):
         # Validate the entire archive before writing anything to the destination.
         for name,digest in manifest['files'].items():
             path = (target/name).resolve()
-            if not path.is_relative_to(target) or (name != 'bookkeeper.sqlite3' and not path.is_relative_to(target/'documents')):
+            if not path.is_relative_to(target) or (name not in {'bookkeeper.sqlite3','bookkeeper.profile.json'} and not path.is_relative_to(target/'documents')):
                 raise ValueError('Unsafe path in backup.')
+            if name=='bookkeeper.profile.json':
+                profile=json.loads(archive.read(name))
+                if not isinstance(profile,dict) or profile.get('format')!=workspace_store.PROFILE_FORMAT or profile.get('version')!=1 or profile.get('database')!='bookkeeper.sqlite3':raise ValueError('The backup profile must reference its included SQLite database.')
             if hashlib.sha256(archive.read(name)).hexdigest() != digest:
                 raise ValueError('Backup checksum mismatch.')
         target.parent.mkdir(parents=True,exist_ok=True)

@@ -18,21 +18,52 @@ Open <http://127.0.0.1:8765/>. Keep the terminal open; Ctrl+C stops the server.
 Installation needs internet access once. The application works offline after
 dependencies are installed. The launcher uses `.venv` when present.
 
-On first run, the app asks where your books should live:
+Open the app through its local URL, rather than double-clicking `index.html`.
+The file-only page provides a link to the running Python app.
+The server versions interface assets by their content so a browser reload uses
+matching scripts/styles after an update instead of mixing cached older files.
 
-- **Create new books:** choose a new or empty local folder outside the app folder
-  and enter your first business name. No business belonging to the developer or
-  another user is seeded.
-- **Open existing books:** choose a folder containing `bookkeeper.sqlite3` and
-  its retained `documents/` directory. Legacy books are preserved and upgraded.
-- **Copy existing books:** choose the source and a new or empty destination
-  outside the app folder. A consistent copy of the database and retained originals
-  is created; the source stays in place. Missing originals must be recovered
-  before copying.
+## Profiles for each user
 
-Use **Data & storage → Choose or move books** to choose another database later.
-The app remembers the selected folder for the current computer user. A native
-folder picker is available; enter the absolute path if the picker is unavailable.
+A profile keeps its own books, saved rules, categories, source accounts, confirmed
+import layouts and preferences. In **Data & storage → Open / switch profile**:
+
+- **Open profile:** choose a `.profile.json` file, a SQLite database (any filename),
+  or an existing books folder. Use **Check location & saved rules** to see the
+  database path, transaction count and rule count before opening it. SQL text
+  exports are not SQLite files; backup ZIPs use Restore backup.
+- **Create profile:** choose a new or empty folder outside the app, a profile name
+  and the first business name. Each user can create independent books and rules.
+- **Copy profile:** choose the source profile/database and a new empty destination.
+  A consistent copy retains its rules and preferences. The source is preserved.
+- **Restore backup:** choose a profile backup ZIP and a new empty destination.
+  Checksums and database integrity are checked before the restored profile opens.
+
+The active profile name appears in the top bar. Data & storage shows its database,
+profile-file path, saved record counts and a profile-name editor. Recent profiles
+are listed by name and location. Switching profiles clears old selections and
+filters so one profile's business IDs and pending decisions do not carry over.
+
+A new profile folder normally contains:
+
+```text
+My profile/
+  bookkeeper.profile.json   # Portable locator/name; uses a relative database path
+  bookkeeper.sqlite3        # Books, rules, categories, layouts and preferences
+  documents/                # Retained original statements
+```
+
+Keep the folder together, or use **Download profile backup** to move it between
+computers. Another user installs the app and selects their own profile. Browser
+storage is not required to recover rules or preferences. Reporting year, business
+selection, sort order and import-grouping choices are saved in the profile's
+SQLite metadata. New profiles start at All businesses / All years. If filters
+hide all rows, a notice shows the profile's total and offers **Show all profile
+transactions**.
+
+Transaction **Sort** is in the table toolbar beside the search/account controls
+in Transactions and Review queue. Credits & payments has the same newest/oldest,
+amount and merchant sorting options. The selected sort order is saved per profile.
 
 ## Import → review → report
 
@@ -237,7 +268,7 @@ and related transaction identifiers.
 
 ## Storage and backups
 
-Your chosen books folder contains `bookkeeper.sqlite3` and managed originals in
+Your chosen profile folder contains its `.profile.json` locator, SQLite database and managed originals in
 `documents/`. Keep that folder together; it is independent of the installed app.
 The suggested new location is `Documents\Local Bookkeeper Books` (or a folder
 under your home directory when Documents is unavailable). SQLite is authoritative;
@@ -245,7 +276,7 @@ originals are copied before their database references are committed. Import
 previews persist for 30 minutes and can be committed once. Schema upgrades are
 additive and preserve existing books.
 
-Only the selected location is remembered in
+The last selected profile/database location and recent profile names are remembered in
 `%LOCALAPPDATA%\LocalBookkeeper\settings.json` on Windows, or
 `~/.config/LocalBookkeeper/settings.json` elsewhere. An unavailable saved location
 returns to setup instead of creating an empty replacement. `LOCAL_BOOKKEEPER_CONFIG`
@@ -257,8 +288,9 @@ No financial data or absolute personal location is stored in the source reposito
 Switching books is serialized with database requests. Write requests identify the
 active workspace, so a stale browser page cannot save into newly selected books.
 
-**Data & storage → Download backup** creates a ZIP containing a consistent SQLite
-snapshot, its retained originals and a SHA-256 manifest. Pending previews are
+**Data & storage → Download profile backup** creates a ZIP containing a consistent SQLite
+snapshot, its profile locator, retained originals and a SHA-256 manifest. Rules and
+preferences are included in the database snapshot. Pending previews are
 omitted. A manifest records any missing originals. Keep backups private.
 
 Restore into a **new** directory; existing books are never overwritten:
@@ -269,7 +301,7 @@ Restore into a **new** directory; existing books are never overwritten:
 .\run_local_bookkeeper.bat
 ```
 
-Then choose **Open existing books** and select `C:\RestoredBooks` in the app.
+Then choose **Open profile** and select `C:\RestoredBooks\bookkeeper.profile.json` in the app. The in-app Restore backup option also performs this workflow without terminal commands.
 
 Restore validates checksums, safe paths, SQLite integrity and foreign keys before
 making the restored directory available. Verify the restored books before
@@ -321,9 +353,16 @@ Use `GET /api/health` first. If `setupRequired` is true, use setup before access
 the books. Other write requests must send `X-Bookkeeper-Workspace` with the
 `workspaceId` returned by health. Re-fetch health after changing books.
 
-- `GET /api/setup`, `POST /api/setup` — `mode` (`create`, `open`, `copy`),
-  absolute folder `directory`, first `businessName` for create, `sourceDirectory`
-  for copy. `POST /api/setup/browse` opens the local folder picker.
+- `GET /api/setup`, `POST /api/setup` — `mode` (`create`, `open`, `copy`, `restore`),
+  `directory` (a profile/SQLite file/folder for open; a new destination folder
+  otherwise), optional `profileName`, first `businessName` for create, and
+  `sourceDirectory` (source profile/database for copy or backup ZIP for restore).
+  `POST /api/setup/browse` accepts `kind` (`directory`, `file`, `backup`).
+- `POST /api/setup/inspect` — `path`; read-only profile record counts and database
+  location before opening.
+- `POST /api/profile/settings` — partial profile preferences (`workspace`, `year`,
+  `sort`, `groupImportsBySourceCategory`); writes require the active workspace ID.
+- `POST /api/profile/name` — rename the active profile and update its locator.
 - `GET /api/health`, `/api/businesses`, `/api/accounts`, `/api/categories`,
   `/api/documents`, `/api/transactions`
 - `POST /api/businesses`, `/api/accounts`
