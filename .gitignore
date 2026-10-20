@@ -1,0 +1,10 @@
+data/
+__pycache__/
+*.py[cod]
+Test docs/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.venv/
+.pytest_cache/
+outputs/
