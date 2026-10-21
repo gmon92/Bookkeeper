@@ -35,7 +35,7 @@ const paths = {
 const icon = name => '<svg viewBox="0 0 24 24" aria-hidden="true">' + (paths[name] || paths.file) + '</svg>';
 const e = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pageNames = { overview: 'Overview', review: 'Review queue', transactions: 'Transactions', credits: 'Credits & payments', automation: 'Rules & automation', imports: 'Imports', accounts: 'Accounts', reports: 'Reports', settings: 'Data & storage' };
-const state = { transactions: [], accounts: [], businesses: [], categories: [], documents: [], health: null, connected: false, ready: false, page: 'overview', workspace: 'all', year: 'all', query: '', account: '', tab: 'all', document: '', selected: new Set(), preview: null, batchAction: '', loadingFile: false };
+const state = { transactions: [], accounts: [], businesses: [], categories: [], documents: [], health: null, connected: false, ready: false, page: 'overview', workspace: 'all', year: 'all', query: '', account: '', tab: 'all', document: '', selected: new Set(), preview: null, batchAction: '', loadingFile: false, portableLedger: true };
 
 
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => { el.innerHTML = icon(el.dataset.icon); }); }
@@ -116,6 +116,7 @@ function updateBatchBar() {
   const bar = $('#batch-bar'); if (!bar) return;
   const count = state.selected.size; bar.hidden = !count;
   bar.innerHTML = '<span><strong>' + count + '</strong> selected <small class="quick-shortcut">C to categorize</small></span><button class="button button-ink" data-quick="categorize">Categorize & assign</button>' + ([...state.selected].some(id=>state.suggestions?.[id]&&!state.suggestions[id].conflict)?'<button class="button button-secondary" data-quick="suggestions">Apply rule suggestions</button>':'') + '<button class="button button-secondary" data-batch="personal">Personal</button><button class="button button-secondary" data-batch="transfer">Transfer</button><button class="button button-secondary" data-batch="exclude">Exclude</button><button class="button button-secondary" data-batch="approve">Review only</button><button class="button button-ink" data-batch="include">Review & include</button><button class="icon-button" data-action="clear-selection" aria-label="Clear selection">' + icon('close') + '</button>';
+  bar.insertAdjacentHTML('beforeend','<button class="button button-secondary" data-selected-groups-rule="transactions">Create / add to rule</button>');
   const credits=state.transactions.filter(t=>state.selected.has(t.id)&&t.direction==='credit');
   if(credits.length)bar.insertAdjacentHTML('beforeend','<button class="button button-secondary" data-review-selected-credits>Handle selected credits ('+credits.length+')</button>');
 }
@@ -134,7 +135,7 @@ function renderReports() {
   const rows=reportRows(), total=rows.reduce((n,t)=>n+contribution(t),0), groups=totalsByCategory(rows), pending=scopedTransactions().filter(t=>isReview(t)&&inYear(t)).length;
   const personal=state.workspace==='personal';
   return heading('Ready when you need the numbers.', 'A reviewable expense ledger for your records and tax preparation.', yearSelect(), 'REPORTS & EXPORTS') +
-    '<section class="report-summary"><div><span class="eyebrow">' + e(workspaceName()) + ' / ' + (state.year==='all'?'ALL YEARS':state.year) + '</span><div class="report-total">' + money(total) + '</div><p>' + rows.length + ' approved business transaction' + (rows.length===1?'':'s') + ' included in expense totals</p></div><button class="button" data-action="export"' + (!rows.length||personal?' disabled':'') + '>' + icon('download') + 'Export expense ledger</button></section><div class="report-grid"><section class="panel"><div class="panel-heading"><div><h2>Category summary</h2><p>Refunds and reviewed credits reduce category totals</p></div>' + icon('reports') + '</div>' + (groups.length?'<div style="padding:16px 0 4px">' + groups.map(([name,amount],i)=>'<div class="report-category-row"><span class="category-index">' + String(i+1).padStart(2,'0') + '</span><strong>' + e(name) + '</strong><span>' + money(amount) + '</span></div>').join('') + '</div>':emptyState('reports','The numbers will come together.','Review and include business transactions to build your expense summary.',button('Go to review queue','review','secondary','arrow-right'),'large')) + '</section><aside class="panel report-details"><h2>Behind the report</h2><div class="report-detail-row"><span>Business scope</span><strong>' + e(workspaceName()) + '</strong></div><div class="report-detail-row"><span>Reporting period</span><strong>' + (state.year==='all'?'All recorded years':state.year) + '</strong></div><div class="report-detail-row"><span>Included transactions</span><strong>' + rows.length + '</strong></div><div class="report-detail-row"><span>Source accounts</span><strong>' + new Set(rows.map(t=>t.accountId)).size + '</strong></div><div class="report-detail-row"><span>Still awaiting review</span><strong>' + pending + '</strong></div><div class="report-detail-row"><span>File format</span><strong>Excel · 7 worksheets</strong></div><div class="info-strip">' + icon('file') + '<p>The ledger includes source accounts, document names, and source rows. Personal items, transfers, and excluded entries stay outside expense totals.</p></div></aside></div><p class="export-note">Prepared for bookkeeping and tax preparation support. Review tax treatment with your preparer.</p>';
+    '<label class="quick-check report-portable"><input type="checkbox" id="report-include-profile"'+(state.portableLedger?' checked':'')+'><span><strong>Include reusable profile in the Excel ledger</strong><small>Contains all businesses and years, saved rules, categorizations and preferences. Restore the exported file to resume in a new session. Uncheck to share only the filtered report.</small></span></label><section class="report-summary"><div><span class="eyebrow">' + e(workspaceName()) + ' / ' + (state.year==='all'?'ALL YEARS':state.year) + '</span><div class="report-total">' + money(total) + '</div><p>' + rows.length + ' approved business transaction' + (rows.length===1?'':'s') + ' included in expense totals</p></div><button class="button" data-action="export"' + (!rows.length||personal?' disabled':'') + '>' + icon('download') + 'Export expense ledger</button></section><div class="report-grid"><section class="panel"><div class="panel-heading"><div><h2>Category summary</h2><p>Refunds and reviewed credits reduce category totals</p></div>' + icon('reports') + '</div>' + (groups.length?'<div style="padding:16px 0 4px">' + groups.map(([name,amount],i)=>'<div class="report-category-row"><span class="category-index">' + String(i+1).padStart(2,'0') + '</span><strong>' + e(name) + '</strong><span>' + money(amount) + '</span></div>').join('') + '</div>':emptyState('reports','The numbers will come together.','Review and include business transactions to build your expense summary.',button('Go to review queue','review','secondary','arrow-right'),'large')) + '</section><aside class="panel report-details"><h2>Behind the report</h2><div class="report-detail-row"><span>Business scope</span><strong>' + e(workspaceName()) + '</strong></div><div class="report-detail-row"><span>Reporting period</span><strong>' + (state.year==='all'?'All recorded years':state.year) + '</strong></div><div class="report-detail-row"><span>Included transactions</span><strong>' + rows.length + '</strong></div><div class="report-detail-row"><span>Source accounts</span><strong>' + new Set(rows.map(t=>t.accountId)).size + '</strong></div><div class="report-detail-row"><span>Still awaiting review</span><strong>' + pending + '</strong></div><div class="report-detail-row"><span>File format</span><strong>Excel · reports + optional profile</strong></div><div class="info-strip">' + icon('file') + '<p>The ledger includes source accounts, document names, and source rows. Personal items, transfers, and excluded entries stay outside expense totals.</p></div></aside></div><section class="panel database-export"><div><h2>A portable copy of your database</h2><p>Download all transactions, accounts, rules, settings and original row data in the active profile, across every business and year. Report filters do not limit this export. Original statement files are included in the profile backup available in Data &amp; storage.</p></div><button class="button button-secondary" data-action="export-database">' + icon('download') + 'Export SQLite database</button></section><p class="export-note">Prepared for bookkeeping and tax preparation support. Review tax treatment with your preparer.</p>';
 }
 function renderSettings() {
   return heading('A place for everything.', 'Your local storage, businesses, and app information.', '', 'DATA & STORAGE') +
@@ -208,6 +209,7 @@ function showError(form,error) { const target=$('.form-error',form);target.textC
 function busy(form,value) { $$('button[type=submit]',form).forEach(button=>{button.disabled=value;button.classList.toggle('is-busy',value);});form.setAttribute('aria-busy',String(value)); }
 function openAccount() { if(!requireConnection())return;$('#account-business').innerHTML=businessOptions(state.workspace==='all'||state.workspace==='personal'?'':state.workspace,true);showDialog('account-dialog'); }
 function openBusiness() { if(!requireConnection())return;showDialog('business-dialog'); }
+async function fileBase64(file){const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return btoa(binary);}
 async function readStatement(file) {
   if(!requireConnection()||!file)return;
   if(state.loadingFile)return;
@@ -215,8 +217,7 @@ async function readStatement(file) {
   if(file.size>20*1024*1024)return toast('Choose a statement smaller than 20 MB.');
   state.loadingFile=true;toast('Reading your statement on this device…');
   try {
-    const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));
-    state.preview=await post('/api/imports/preview',{filename:file.name,contentBase64:btoa(binary)});
+    state.preview=await post('/api/imports/preview',{filename:file.name,contentBase64:await fileBase64(file)});
     openImportPreview();
   }catch(error){toast(error.message);}finally{state.loadingFile=false;}
 }
@@ -253,6 +254,11 @@ function syncEditor() {
   const valid=classification==='business'&&((direction==='debit'&&['expense','fee'].includes(kind))||(direction==='credit'&&kind==='refund'));
   form.elements.includeInTotals.disabled=!valid;if(!valid)form.elements.includeInTotals.checked=false;
   $('#include-help').textContent=valid?'Inclusion is your explicit decision. Saving marks the transaction reviewed.':classification!=='business'?'Personal items and transfers remain outside business expense totals.':'Choose a transaction kind and money movement before including it in expense totals.';
+  syncEditorRule();
+}
+function syncEditorRule(){
+  const form=$('#transaction-form'),classification=new FormData(form).get('classification');
+  syncDecisionRule('edit',true,form.elements.includeInTotals.checked,classification==='business'&&form.elements.direction.value==='debit'&&['expense','fee'].includes(form.elements.kind.value));
 }
 function openEditor(id) {
   const t=state.transactions.find(tx=>tx.id===id);if(!t)return;
@@ -260,11 +266,12 @@ function openEditor(id) {
   $('#editor-title').textContent=t.merchant||t.description;
   form.elements.id.value=t.id;form.elements.description.value=t.description;form.elements.date.value=/^\d{4}-\d{2}-\d{2}$/.test(t.date)?t.date:'';form.elements.amount.value=(t.amountCents/100).toFixed(2);
   $('#edit-account').innerHTML=accountOptions(t.accountId);
+  initializeDecisionRule('edit',[t]);
   const business=t.businessId||(!['all','personal'].includes(state.workspace)?state.workspace:state.businesses[0]?.id||'');
   $('#edit-business').innerHTML=businessOptions(business);
   form.elements.direction.value=t.direction;form.elements.kind.value=t.kind;form.elements.notes.value=t.notes||'';
   const radio=$('input[name=classification][value="'+t.classification+'"]',form);if(radio)radio.checked=true;
-  setCategories(business,t.category);syncEditor();form.elements.includeInTotals.checked=included(t);
+  setCategories(business,t.category);syncEditor();form.elements.includeInTotals.checked=included(t);syncEditorRule();
   $('#editor-amount').innerHTML='<strong>'+signedMoney(t)+'</strong>'+statusMarkup(t);
   let creditPanel=$('#editor-credit-actions');if(!creditPanel){$('#editor-amount').insertAdjacentHTML('afterend','<div id="editor-credit-actions"></div>');creditPanel=$('#editor-credit-actions');}
   const related=state.transactions.find(r=>r.id===t.relatedTransactionId),refunds=state.transactions.filter(r=>r.relatedTransactionId===t.id&&r.creditTreatment==='refund');
@@ -314,14 +321,16 @@ document.addEventListener('click',event=>{
   else if(action==='clear-selection'){state.selected.clear();updateLedger();}
   else if(action==='clear-document'){triage.resultIds=null;state.document='';render();}
   else if(action==='backup'){const a=document.createElement('a');a.href='/api/backup';a.download='bookkeeper-backup.zip';a.click();}
+  else if(action==='export-database'){if(requireConnection()){const anchor=document.createElement('a');anchor.href='/api/export.sqlite3';anchor.download='bookkeeper-database.sqlite3';anchor.click();}}
   else if(action==='export'){
-    const params=new URLSearchParams();if(!['all','personal'].includes(state.workspace))params.set('businessId',state.workspace);if(state.year!=='all')params.set('year',state.year);
+    const params=new URLSearchParams({portable:state.portableLedger?'1':'0'});if(!['all','personal'].includes(state.workspace))params.set('businessId',state.workspace);if(state.year!=='all')params.set('year',state.year);
     const anchor=document.createElement('a');anchor.href='/api/export.xlsx?'+params;anchor.download='bookkeeper-report.xlsx';anchor.click();
   }
   const zone=event.target.closest('#dropzone');if(zone&&!action&&requireConnection())$('#file-input').click();
 });
 document.addEventListener('change',event=>{
   const target=event.target;
+  if(target.id==='report-include-profile')state.portableLedger=target.checked;
   if(target.matches('[data-year]')){state.year=target.value;state.selected.clear();render();saveProfilePreferences({year:state.year});}
   if(target.id==='account-filter'){state.account=target.value;state.selected.clear();updateLedger();}
   if(target.matches('[data-select]')){target.checked?state.selected.add(target.dataset.select):state.selected.delete(target.dataset.select);target.closest('tr').classList.toggle('selected',target.checked);updateBatchBar();const rows=filteredLedger();$('#select-all').checked=rows.length>0&&rows.every(t=>state.selected.has(t.id));$('#select-all').indeterminate=!$('#select-all').checked&&rows.some(t=>state.selected.has(t.id));}
@@ -329,7 +338,7 @@ document.addEventListener('change',event=>{
 });
 document.addEventListener('input',event=>{if(event.target.id==='transaction-search'){state.query=event.target.value;state.selected.clear();updateLedger();}});
 $('#workspace-select').addEventListener('change',event=>{state.workspace=event.target.value;state.selected.clear();state.document='';state.account='';state.query='';saveProfilePreferences({workspace:state.workspace});render();});
-$('#transaction-form').addEventListener('change',event=>{if(['classification','kind','direction'].includes(event.target.name))syncEditor();if(event.target.name==='businessId')setCategories(event.target.value,$('#edit-category').value);});
+$('#transaction-form').addEventListener('change',event=>{if(['classification','kind','direction'].includes(event.target.name))syncEditor();if(event.target.name==='businessId')setCategories(event.target.value,$('#edit-category').value);if(event.target.name==='accountId'){const all=$('#edit-rule-account').value==='*',account=state.accounts.find(a=>a.id===event.target.value);$('#edit-rule-account').innerHTML=quickOptions([[account.id,'This account: '+accountName(account)],['*','All accounts in this profile']],all?'*':account.id);}syncEditorRule();});
 $('#account-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget;busy(form,true);
   try{const data=Object.fromEntries(new FormData(form));data.businessId=data.businessId||null;const saved=await post('/api/accounts',data);await loadData({quiet:true});form.reset();$('#account-dialog').close();if($('#import-dialog').open){$('#import-account').innerHTML=accountOptions(saved.id);}toast('Source account added.');}catch(error){showError(form,error);}finally{busy(form,false);}
@@ -350,8 +359,8 @@ $('#transaction-form').addEventListener('submit',async event=>{
     const amountCents=Number(match[1])*100+Number((match[2]||'').padEnd(2,'0'));if(!Number.isSafeInteger(amountCents)||amountCents<=0)throw new Error('Enter a positive amount.');
     const includeInTotals=form.elements.includeInTotals.checked&&!form.elements.includeInTotals.disabled;
     if(includeInTotals&&/uncategorized/i.test(data.category))throw new Error('Choose an expense category before including this transaction in totals.');
-    await post('/api/transactions/'+encodeURIComponent(data.id),{description:data.description,merchant:data.description,date:data.date,amountCents,accountId:data.accountId,businessId:data.classification==='business'?data.businessId:null,direction:data.direction,kind:data.kind,classification:data.classification,category:data.category,includeInTotals,notes:data.notes,status:'approved'},'PATCH');
-    $('#transaction-dialog').close();await loadData({quiet:true});toast(includeInTotals?'Reviewed and included in expense totals.':'Transaction reviewed and saved outside totals.');
+    const saved=await post('/api/transactions/'+encodeURIComponent(data.id),{description:data.description,merchant:data.description,date:data.date,amountCents,accountId:data.accountId,businessId:data.classification==='business'?data.businessId:null,direction:data.direction,kind:data.kind,classification:data.classification,category:data.category,includeInTotals,notes:data.notes,status:'approved',...decisionRulePayload('edit',true)},'PATCH');
+    $('#transaction-dialog').close();await loadData({quiet:true});toast((includeInTotals?'Reviewed and included in expense totals.':'Transaction reviewed and saved outside totals.')+(saved.ruleId?' Future-import rule saved.':''));
   }catch(error){showError(form,error);}finally{busy(form,false);}
 });
 $('#batch-form').addEventListener('submit',async event=>{

@@ -6,6 +6,13 @@ listens on `127.0.0.1`; normal processing does not use a cloud service.
 
 ## Setup and run
 
+For Docker, run `docker compose up -d --build`, then open
+<http://127.0.0.1:8766/>. Profiles and settings persist in a volume. See the
+[Docker setup guide](docs/docker.md) for existing profiles, host-folder storage,
+ports and updates.
+
+### Native Python setup
+
 Python 3.11 or later is required. From PowerShell in the project folder:
 
 ```powershell
@@ -23,6 +30,39 @@ The file-only page provides a link to the running Python app.
 The server versions interface assets by their content so a browser reload uses
 matching scripts/styles after an update instead of mixing cached older files.
 
+## Resume from exported books
+
+An exported **SQLite database** contains the full profile: all transactions and
+categorizations, credit decisions, merchant/credit rules with their account scopes
+and automation levels, categories, businesses, accounts, confirmed import layouts,
+view preferences, history and original row archives. Open it directly with **Open
+profile**, or use **Restore export / backup** to copy it into new books.
+
+Excel expense ledgers now default to **Include reusable profile** in Reports.
+The visible financial worksheets follow the business/year report filters. The
+embedded profile covers **every business and year**, which is stated beside the
+export button and on the workbook's **Profile Restore** tab. Uncheck the option
+to share just the filtered report without a profile copy. The profile uses a
+checksum-verified SQLite snapshot stored in workbook cells, so its rules and IDs
+resume exactly rather than being inferred from ledger labels or rounded amounts.
+
+To start a new session, open the profile chooser, select **Restore export /
+backup**, upload the exported `.xlsx` or `.sqlite3` file, and choose a new empty
+folder. The restored profile opens with its rules and categorization decisions;
+those rules continue running on future matching imports. The uploaded file can
+come from another local device or the browser connected to Docker.
+
+Editing the visible spreadsheet report does not change its embedded profile.
+Make decisions in the app and export a new copy. Older Excel reports, CSV ledgers,
+and reports exported without reusable profile data cannot recreate saved rules;
+restore a newer portable export or SQLite database instead. Excel embedding
+supports database snapshots up to 64 MB. Database exports have no Excel limit.
+
+Original statement **row data** is retained in the database and reusable ledger.
+Original statement **files** are included by **Download profile backup**; use that
+ZIP when you want those files transferred too. Restores always use new/empty
+folders and never merge or overwrite existing books.
+
 ## Profiles for each user
 
 A profile keeps its own books, saved rules, categories, source accounts, confirmed
@@ -31,13 +71,15 @@ import layouts and preferences. In **Data & storage → Open / switch profile**:
 - **Open profile:** choose a `.profile.json` file, a SQLite database (any filename),
   or an existing books folder. Use **Check location & saved rules** to see the
   database path, transaction count and rule count before opening it. SQL text
-  exports are not SQLite files; backup ZIPs use Restore backup.
+  exports are not SQLite files; reusable ledgers and backup ZIPs use Restore export / backup.
 - **Create profile:** choose a new or empty folder outside the app, a profile name
   and the first business name. Each user can create independent books and rules.
 - **Copy profile:** choose the source profile/database and a new empty destination.
   A consistent copy retains its rules and preferences. The source is preserved.
-- **Restore backup:** choose a profile backup ZIP and a new empty destination.
-  Checksums and database integrity are checked before the restored profile opens.
+- **Restore export / backup:** upload a reusable Excel ledger, exported SQLite
+  database or profile backup ZIP, or choose its path on the server. Select a new
+  empty destination. Checksums and database integrity are checked before opening.
+  Browser uploads support 20 MB; use a server file path for larger exports.
 
 The active profile name appears in the top bar. Data & storage shows its database,
 profile-file path, saved record counts and a profile-name editor. Recent profiles
@@ -159,10 +201,21 @@ shown in All activity/Personal until assigned to a business.
   category batch. Nothing is applied while checked rows remain blocked.
 - Preview revisions detect intervening transaction or rule changes. Every
   applied batch has field history and can be reversed in **Data & storage**.
-- **Remember this merchant** can save a source-account-scoped rule with the batch.
-  The phrase must match every selected row. Choose All source accounts explicitly
-  to broaden scope. A saved rule survives undoing transaction changes and can be
-  paused independently.
+- **Save this decision as a rule** is available while categorizing a batch,
+  reviewing a business expense in the transaction drawer, or making a credit
+  decision. Choose **This account** or **All accounts in this profile**. The
+  description phrase must match the selected rows. Rules use that phrase and
+  money direction; unrelated activity on the account keeps its own decision.
+- Choose **Apply this decision automatically** to reuse the category/credit
+  handling and current review/totals choice on future imports. Unreviewed category
+  decisions stay awaiting review. Choose **Suggest this decision for review** to
+  keep future matches unapproved and outside totals. The preview explains the
+  saved rule, scope and reporting behavior before applying the batch.
+- A newly saved decision replaces prior rules for exactly the same description
+  conditions and account scope. Account-specific rules take precedence over an
+  all-account rule with the same description. More specific conditions and
+  conflicts continue to follow the rules described below. Saved rules survive
+  undoing transaction changes and can be edited or paused in Rules & automation.
 - **Merchant rules** lets you create, preview, edit, pause and enable rules.
   Existing rules start in Suggest only mode. Suggestions are computed for new/unreviewed activity; reviewed transactions
   remain in place. Conflicting destinations are flagged instead of choosing one.
@@ -173,6 +226,28 @@ The fastest first pass for a structured card statement is often **More filters �
 Statement category → Select all results → Categorize & assign**. Use merchant
 groups and saved rules for the repeat work in later imports. Selection is limited
 to the current filtered results and the server accepts up to 5,000 rows per batch.
+
+## Combine selected transaction groups into a rule
+
+In **Transactions** or **Review queue**, switch to **Merchant groups** and check
+several group cards. Choose **Create / add to rule** in the selection controls.
+The same action is available for selected groups in **Credits & payments**.
+
+- The picker lists the chosen merchants with checkboxes. Leave unwanted groups
+  out, then choose **Create a new combined rule** or an existing active merchant
+  rule of the same type.
+- Continue to the rule builder to confirm all merchant phrases, the source
+  account (or all accounts), category/credit decision and automation level.
+  Adding to an existing rule keeps its earlier phrases and other conditions.
+- Preview checks that every chosen transaction matches the proposed rule. If an
+  existing rule's account, source category or amount limits leave groups out,
+  adjust those conditions explicitly or return to the picker.
+- Save creates or updates one rule with up to 200 alternative merchant phrases.
+  Its future matches can contain any one phrase. Existing transaction decisions
+  are preserved; use the normal categorization/credit decision or existing-row
+  automation preview to change them.
+- **Save this decision as a rule** in category/credit batches also accepts several
+  merchants: one phrase per line, filled from the selected groups.
 
 ## Rules & automation
 
@@ -258,7 +333,7 @@ Saved credit decisions, pair links and reporting effects have audit history and
 can be undone in **Data & storage**. Saved description rules remain available
 after undo and can be paused in **Credit rules**.
 
-Built-in description suggestions never automatically approve credits or include refunds. Saved credit rules start in Suggest only mode; their automation settings can be changed explicitly in Rules & automation. Existing imports and approvals are preserved during the schema
+Built-in description suggestions never automatically approve credits or include refunds. Saving a credit decision as a rule lets you explicitly reuse its approval and refund inclusion choice, or save a suggestion instead. Future rules never reuse transaction-specific payment or purchase links. Existing imports and approvals are preserved during the schema
 upgrade and appear in **Needs decision** until a specific credit decision is
 recorded. A business's normal ledger shows its assigned business activity and
 unassigned activity on its owned accounts. Transfers and credits placed outside
@@ -283,6 +358,12 @@ returns to setup instead of creating an empty replacement. `LOCAL_BOOKKEEPER_CON
 can override this preference-file path. `LOCAL_BOOKKEEPER_DATA` is recognized as a
 legacy location to offer during setup; saved user preferences take precedence.
 `LOCAL_BOOKKEEPER_PORT` changes the local HTTP port.
+`LOCAL_BOOKKEEPER_HOST` changes the bind address (native default `127.0.0.1`).
+`LOCAL_BOOKKEEPER_ALLOWED_HOSTS` adds explicit comma-separated `host:port`
+addresses when a container port mapping uses a different browser port. Requests
+with an Origin must match the request's Host. `LOCAL_BOOKKEEPER_BOOKS_DIR` changes
+the suggested new-profile location. Docker sets `LOCAL_BOOKKEEPER_STORAGE_ROOT`
+to keep new profiles on its persistent volume.
 
 No financial data or absolute personal location is stored in the source repository.
 Switching books is serialized with database requests. Write requests identify the
@@ -356,7 +437,9 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
 - `GET /api/setup`, `POST /api/setup` — `mode` (`create`, `open`, `copy`, `restore`),
   `directory` (a profile/SQLite file/folder for open; a new destination folder
   otherwise), optional `profileName`, first `businessName` for create, and
-  `sourceDirectory` (source profile/database for copy or backup ZIP for restore).
+  `sourceDirectory` (source profile/database for copy, or SQLite/portable Excel/
+  backup ZIP path for restore). Restore can instead accept `contentBase64` for a
+  browser upload up to 20 MB; an uploaded file takes precedence over the path.
   `POST /api/setup/browse` accepts `kind` (`directory`, `file`, `backup`).
 - `POST /api/setup/inspect` — `path`; read-only profile record counts and database
   location before opening.
@@ -381,13 +464,21 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
 - `POST /api/review/undo` — `actionId`
 - `POST /api/duplicates/resolve` — `transactionId`, `canonicalId`,
   `decision` (`duplicate` or `distinct`)
-- `GET /api/export.xlsx`, `/api/export.csv` — optional `businessId`, `year`
+- `GET /api/export.xlsx`, `/api/export.csv` — optional `businessId`, `year`.
+  XLSX includes the full reusable profile by default (`portable=1`); use
+  `portable=0` for a report without profile data. CSV contains report rows only.
 - `GET /api/backup`
 - `POST /api/categorization/preview` and `/api/categorization/apply` — selected
   `ids`, category/business, review/inclusion choices; apply requires the returned
   preview `revision`.
 - `GET /api/suggestions`, `GET /api/rules`, `POST /api/rules/preview`,
   `POST /api/rules` — local merchant rules and non-approving suggestions.
+- `GET /api/export.sqlite3` — download a consistent standalone SQLite snapshot
+  of the active profile, including committed WAL data, saved rules/preferences
+  and original row archives. Report filters do not limit this download. Staged
+  imports are omitted from the copy; original statement files stay in the profile
+  folder and are included by the full profile backup. Reports & exports provides
+  an **Export SQLite database** button.
 - `GET /api/automation` — unified rules, historical match counts, rule ideas and
   automation action statuses.
 - `POST /api/automation/rules/preview`, `POST /api/automation/rules` — preview/save
@@ -409,7 +500,10 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
   business/category and explicit `includeInTotals`. A single-credit decision
   may include `relatedId` (or null to unlink). Apply requires the preview
   `revision`. Optional `rememberRule`, `rulePattern`, `ruleAccountId` and
-  `ruleAllAccounts` create a suggestion rule.
+  `ruleAllAccounts` save a rule. `rulePatterns` can supply several merchant
+  phrases instead of the legacy `rulePattern` string. `ruleMode` selects `suggest` (the API default),
+  `categorize`, or `review`. Category batch/transaction edits support the same
+  rule options; automatic review requires a reviewed current decision.
 
 Run the financial and source-retention regression checks with:
 

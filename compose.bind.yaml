@@ -1,0 +1,10 @@
+# Optional: select your own host folder instead of the named Docker volume.
+# Set BOOKKEEPER_DATA_DIR in .env, then use both Compose files together.
+services:
+  bookkeeper:
+    volumes:
+      - type: bind
+        source: ${BOOKKEEPER_DATA_DIR:?Set BOOKKEEPER_DATA_DIR to an existing absolute folder}
+        target: /data
+        bind:
+          create_host_path: false

@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from statement_import import parse_statement
 from reports import excel_report, safe_text
-from backup import create_backup, restore_backup
+from backup import create_backup, restore_backup, export_database
 import categorization
 import credits
 import workspace_store
@@ -34,8 +34,17 @@ DEFAULT_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local-boo
 DATA_DIR = Path(os.environ.get("LOCAL_BOOKKEEPER_DATA", DEFAULT_DATA_DIR)).resolve()
 DOCS_DIR = DATA_DIR / "documents"
 DB_PATH = DATA_DIR / "bookkeeper.sqlite3"
-HOST = "127.0.0.1"
+HOST = os.environ.get('LOCAL_BOOKKEEPER_HOST','127.0.0.1')
 PORT = int(os.environ.get("LOCAL_BOOKKEEPER_PORT", "8765"))
+EXTRA_ALLOWED_HOSTS = set()
+for authority in os.environ.get('LOCAL_BOOKKEEPER_ALLOWED_HOSTS','').split(','):
+    authority=authority.strip().lower()
+    if not authority:continue
+    parsed=urlparse('http://'+authority)
+    try:valid=parsed.hostname and parsed.port and not (parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment or '*' in authority)
+    except ValueError:valid=False
+    if not valid:raise ValueError('LOCAL_BOOKKEEPER_ALLOWED_HOSTS must contain comma-separated host:port entries without URLs or wildcards.')
+    EXTRA_ALLOWED_HOSTS.add(authority)
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 STAGING_LOCK = threading.Lock()
 WORKSPACE_LOCK = threading.RLock()
@@ -230,13 +239,18 @@ def setup_status():
     return {'configured':WORKSPACE_READY,'directory':str(DATA_DIR) if WORKSPACE_READY else None,
             'defaultDirectory':str(workspace_store.default_directory()),'existingDirectories':candidates,
             'error':SETUP_ERROR,'applicationDirectory':str(ROOT),'profile':active_profile(),
-            'recentProfiles':preferences.get('recentProfiles',[])}
+            'recentProfiles':preferences.get('recentProfiles',[]),
+            'containerStorage':os.environ.get('LOCAL_BOOKKEEPER_STORAGE_ROOT'),
+            'nativePickerAvailable':not bool(os.environ.get('LOCAL_BOOKKEEPER_STORAGE_ROOT'))}
 
 
 def configure_workspace(body):
     mode = body.get('mode')
     if mode not in {'create','open','copy','restore'}: raise ValueError('Choose create, open, copy or restore a profile.')
     directory = workspace_store.directory_path(body.get('directory')) if mode!='open' else None
+    storage=os.environ.get('LOCAL_BOOKKEEPER_STORAGE_ROOT')
+    if directory and storage and not directory.is_relative_to(Path(storage).resolve()):
+        raise ValueError('Choose a profile destination inside '+storage+' so its data persists outside the container.')
     name=body.get('profileName') or None
     if name is not None and (not isinstance(name,str) or not name.strip() or len(name.strip())>100):raise ValueError('Enter a profile name up to 100 characters.')
     if mode in {'create','copy','restore'} and (directory==ROOT or directory.is_relative_to(ROOT)):
@@ -261,7 +275,14 @@ def configure_workspace(body):
     else:
         if directory.exists() and any(directory.iterdir()): raise ValueError('Copy books into a new or empty folder. Existing files are never overwritten.')
         if mode=='restore':
-            source=workspace_store.absolute_path(body.get('sourceDirectory'))
+            if body.get('contentBase64') is not None:
+                encoded=body['contentBase64']
+                if not isinstance(encoded,str): raise ValueError('Choose a profile export file to restore.')
+                try: content=base64.b64decode(encoded,validate=True)
+                except (ValueError,base64.binascii.Error) as exc: raise ValueError('The uploaded profile file could not be read.') from exc
+                if len(content)>MAX_UPLOAD_BYTES: raise ValueError('Profile upload exceeds 20 MB. Use a file path on the server for larger exports.')
+                source=io.BytesIO(content)
+            else: source=workspace_store.absolute_path(body.get('sourceDirectory'))
             restore_backup(source,directory,allow_empty=True)
         else:
             source=workspace_store.locate_books(body.get('sourceDirectory'))
@@ -489,10 +510,10 @@ class Handler(SimpleHTTPRequestHandler):
         return body
 
     def local_request(self):
-        host = self.headers.get('Host', '')
-        allowed = {f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}'}
+        host = self.headers.get('Host', '').lower()
+        allowed = {f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}'} | EXTRA_ALLOWED_HOSTS
         origin = self.headers.get('Origin')
-        return host in allowed and (not origin or origin in {'http://' + value for value in allowed})
+        return host in allowed and (not origin or origin in {scheme+'://' + host for scheme in ('http','https')})
 
     def do_GET(self):
         try:
@@ -570,6 +591,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, [dict(r) for r in db.execute('SELECT * FROM transaction_history WHERE transaction_id=? ORDER BY rowid', (path.split('/')[3],))])
         if path == '/api/backup':
             return self.backup()
+        if path == '/api/export.sqlite3':
+            data = export_database(DB_PATH)
+            return self.download(data,'bookkeeper-database-'+dt.date.today().isoformat()+'.sqlite3','application/vnd.sqlite3')
         if path == '/api/export.xlsx':
             return self.export_excel()
         if path == "/api/export.csv":
@@ -937,6 +961,11 @@ class Handler(SimpleHTTPRequestHandler):
             self.validate_transaction(db, values)
             if any(values[k]!=current[k] for k in ('amount_cents','account_id','direction','transaction_kind')) and (current['related_transaction_id'] or db.execute('SELECT 1 FROM transactions WHERE related_transaction_id=?',(transaction_id,)).fetchone()):
                 raise ValueError('Unlink this transaction in Credits & payments before changing its amount, source account, movement or kind.')
+            if body.get('rememberRule') and (values['classification']!='business' or values['direction']!='debit' or values['transaction_kind'] not in {'expense','fee'}):
+                raise ValueError('Save category rules for business expenses here. Use Credits & payments to save credit decision rules.')
+            rule = automation.decision_rule(db,body,[values],kind='expense',business=values['business_id'],
+                category=values['category_name'],reviewed=values['status']=='approved',include=bool(values['include_in_totals']))
+            rule_id = automation.save_decision_rule(db,rule,now) if rule else None
             values["updated_at"] = now
             db.execute("""UPDATE transactions SET date=?,posted_date=?,description=?,merchant=?,account_id=?,amount_cents=?,direction=?,transaction_kind=?,classification=?,business_id=?,category_id=?,category_name=?,status=?,include_in_totals=?,excluded=?,notes=?,updated_at=? WHERE id=?""",
               (values["date"],values["posted_date"],values["description"],values["merchant"],values["account_id"],values["amount_cents"],values["direction"],values["transaction_kind"],values["classification"],values["business_id"],values["category_id"],values["category_name"],values["status"],values["include_in_totals"],values['excluded'],values["notes"],now,transaction_id))
@@ -944,7 +973,7 @@ class Handler(SimpleHTTPRequestHandler):
             new_state = {key: new_row[key] for key in columns}
             self.record_change(db,transaction_id,old_state,new_state,action_id,'edit',now)
             db.execute('UPDATE transaction_history SET reason=? WHERE action_id=?',('You explicitly saved this transaction in the editor. The chosen category is “'+new_row['category_name']+'”; amount '+format(Decimal(new_row['amount_cents'])/100,'.2f')+' USD and movement '+new_row['direction']+'.',action_id))
-        return self.send_json(200, {"ok": True, 'actionId':action_id})
+        return self.send_json(200, {"ok": True, 'actionId':action_id,'ruleId':rule_id})
 
     @staticmethod
     def validate_transaction(db, values, check_category=True):
@@ -1077,6 +1106,8 @@ class Handler(SimpleHTTPRequestHandler):
         query = parse_qs(urlparse(self.path).query)
         business = query.get('businessId',[''])[0]
         year = query.get('year',[''])[0]
+        portable=query.get('portable',['1'])[0]
+        if portable not in ('0','1'): raise ValueError('Choose whether to include reusable profile data.')
         if year and not re.fullmatch(r'\d{4}',year):
             return self.send_json(400, {'error':'Choose a valid reporting year.'})
         where, params = [], []
@@ -1092,10 +1123,11 @@ class Handler(SimpleHTTPRequestHandler):
             rows = db.execute('''SELECT t.*,a.nickname,a.last_four,d.filename,b.display_name AS business_name FROM transactions t
                 JOIN accounts a ON a.id=t.account_id LEFT JOIN documents d ON d.id=t.document_id LEFT JOIN businesses b ON b.id=t.business_id'''+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY t.date,t.id',params).fetchall()
         try:
-            data = excel_report(rows,label,year)
+            data = excel_report(rows,label,year,database=export_database(DB_PATH) if portable=='1' else None,
+                profile=active_profile() if portable=='1' else None)
         except ImportError:
             return self.send_json(503, {'error':'Install Excel support with python -m pip install -r requirements.txt.'})
-        return self.download(data,'bookkeeper-report.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        return self.download(data,'bookkeeper-ledger-with-profile.xlsx' if portable=='1' else 'bookkeeper-report.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
     def backup(self):
         # Serialize with imports so the database snapshot and document set agree.
