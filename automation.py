@@ -116,7 +116,7 @@ def cents(value):
     except (InvalidOperation, ValueError): raise ValueError('Use nonnegative amounts with at most two decimal places.')
 
 
-def values(db, body):
+def values(db, body, allow_new_category=False):
     kind = body.get('type', 'expense')
     if kind not in ('expense', 'credit'): raise ValueError('Choose an expense or credit rule.')
     mode = body.get('mode', 'suggest')
@@ -141,8 +141,8 @@ def values(db, body):
     if needs_business:
         if not db.execute('SELECT id FROM businesses WHERE active=1 AND id=?',(business,)).fetchone(): raise ValueError('Choose a business.')
         cat = db.execute('SELECT name FROM categories WHERE active=1 AND name=? COLLATE NOCASE AND (business_id=? OR business_id IS NULL)',(category,business)).fetchone()
-        if not cat or 'uncategorized' in cat['name'].lower(): raise ValueError('Choose an existing expense category for this business.')
-        category = cat['name']
+        if (not cat and not allow_new_category) or 'uncategorized' in category.lower(): raise ValueError('Choose an existing expense category for this business.')
+        category = cat['name'] if cat else category
     else: business, category = None, ''
     include = body.get('includeInTotals', False)
     if type(include) is not bool: raise ValueError('Inclusion must be true or false.')
@@ -151,6 +151,43 @@ def values(db, body):
     return {'id':body.get('id') or str(uuid.uuid4()),'type':kind,'pattern':' | '.join(patterns) or source,
         'account_id':account,'business_id':business,'category_name':category,'treatment':treatment,'active':1,
         'automation_mode':mode,'conditions_json':json.dumps(c,sort_keys=True),'include_expenses':int(include)}
+
+
+def decision_rule(db, body, rows, *, kind, business=None, category='', treatment='', reviewed=False, include=False, allow_new_category=False):
+    """Prepare a future-import rule from an explicit transaction decision."""
+    for key in ('rememberRule', 'ruleAllAccounts'):
+        if key in body and type(body[key]) is not bool: raise ValueError('Rule options must be true or false.')
+    if body.get('rememberRule') is not True: return None
+    account = body.get('ruleAccountId') or None
+    if not account and body.get('ruleAllAccounts') is not True:
+        raise ValueError('Choose the source account or explicitly choose all accounts for this rule.')
+    mode = body.get('ruleMode', 'suggest')
+    if mode == 'review' and not reviewed:
+        raise ValueError('Review the selected decision before automatically reviewing future matches.')
+    rule = values(db, {'type':kind, 'patterns':[body.get('rulePattern', '')], 'accountId':account,
+        'businessId':business, 'category':category, 'treatment':treatment, 'mode':mode,
+        'includeInTotals':bool(include and mode=='review')}, allow_new_category=allow_new_category)
+    if not rows or any(not matches(row,rule) for row in rows):
+        raise ValueError('The rule description and account must match every selected transaction. Narrow the selection or edit the phrase.')
+    # Replace a prior decision with exactly these conditions and account scope.
+    # More specific rules retain their existing precedence.
+    rule['replacesRuleIds'] = [saved['id'] for saved in all_rules(db)
+        if saved['type']==kind and saved['account_id']==account
+        and [text(p) for p in conditions(saved).get('patterns',[saved['pattern']])]==[text(rule['pattern'])]
+        and not conditions(saved).get('sourceCategory')
+        and conditions(saved).get('minCents') is None and conditions(saved).get('maxCents') is None]
+    return rule
+
+
+def save_decision_rule(db, rule, now):
+    table = 'merchant_rules' if rule['type']=='expense' else 'credit_rules'
+    fields = ['id','pattern','account_id','business_id','category_name','conditions_json','automation_mode','include_expenses']
+    if rule['type']=='credit': fields.append('treatment')
+    for previous in rule['replacesRuleIds']:
+        db.execute('UPDATE '+table+' SET active=0 WHERE id=?',(previous,))
+    db.execute('INSERT INTO '+table+'('+','.join(fields)+',created_at) VALUES('+','.join('?' for _ in fields)+',?)',
+               [rule[k] for k in fields]+[now])
+    return rule['id']
 
 
 def save(db, body, now):

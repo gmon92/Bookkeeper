@@ -125,19 +125,10 @@ def candidates(db, transaction_id, treatment, query=''):
 
 
 def rule_values(db, body, rows):
-    if body.get('rememberRule') is not True: return None
-    treatment = body['treatment']
-    if not treatment: raise ValueError('Choose a credit decision before saving a rule.')
-    pattern, account = body.get('rulePattern',''), body.get('ruleAccountId') or None
-    if not isinstance(pattern,str) or len(pattern)>120 or len(merchant_text(pattern))<2:
-        raise ValueError('Enter a credit description phrase between 2 and 120 characters.')
-    if not account and body.get('ruleAllAccounts') is not True:
-        raise ValueError('Choose a source account or explicitly choose all source accounts for this rule.')
-    if any((' '+merchant_text(pattern)+' ') not in (' '+merchant_text(r['merchant'] or r['description'])+' ') or (account and account!=r['account_id']) for r in rows):
-        raise ValueError('The credit rule phrase and source account must match every selected credit.')
-    return {'pattern':pattern.strip(),'account_id':account,'treatment':treatment,
-            'business_id':body.get('businessId') if treatment=='refund' and body.get('refundUsage')=='business' else None,
-            'category_name':body.get('category','') if treatment=='refund' and body.get('refundUsage')=='business' else ''}
+    business_refund = body.get('treatment')=='refund' and body.get('refundUsage')=='business'
+    return automation.decision_rule(db,body,rows,kind='credit',treatment=body.get('treatment',''),
+        business=body.get('businessId') if business_refund else None,category=body.get('category','') if business_refund else '',
+        reviewed=True,include=body.get('includeInTotals',False))
 
 
 def plan(db, body, validate):
@@ -207,7 +198,8 @@ def plan(db, body, validate):
             change(target,partner,'You linked this withdrawal to a card payment. Both sides are transfers outside expense totals.')
     rule = rule_values(db,body,rows)
     items = list(changes.values())
-    revision = hashlib.sha256(json.dumps({'changes':items,'options':{k:v for k,v in body.items() if k!='revision'},'rule':rule},sort_keys=True).encode()).hexdigest()
+    rule_revision = {k:v for k,v in rule.items() if k!='id'} if rule else None
+    revision = hashlib.sha256(json.dumps({'changes':items,'options':{k:v for k,v in body.items() if k!='revision'},'rule':rule_revision},sort_keys=True).encode()).hexdigest()
     public = {'revision':revision,'selectedCount':len(rows),'affectedCount':len(items),'amountCents':sum(r['amount_cents'] for r in rows),
               'treatment':treatment,'label':LABELS[treatment],'includeInTotals':include,
               'rows':[{k:v for k,v in c.items() if k!='version'} for c in items], 'rememberedRule':rule}
@@ -225,7 +217,5 @@ def commit(db, body, handler, now):
         db.execute('UPDATE transactions SET '+','.join(k+'=?' for k in FIELDS)+',updated_at=? WHERE id=?',(*[new[k] for k in FIELDS],now,c['id']))
         handler.record_change(db,c['id'],c['old'],new,action_id,'credit_review',now)
         db.execute('UPDATE transaction_history SET reason=? WHERE action_id=? AND transaction_id=?',(c['reason'],action_id,c['id']))
-    if rule:
-        db.execute('INSERT INTO credit_rules(id,pattern,account_id,treatment,business_id,category_name,created_at) VALUES(?,?,?,?,?,?,?)',
-                   (str(uuid.uuid4()),rule['pattern'],rule['account_id'],rule['treatment'],rule['business_id'],rule['category_name'],now))
-    return {'ok':True,'count':public['selectedCount'],'affectedCount':len(changes),'actionId':action_id}
+    rule_id = automation.save_decision_rule(db,rule,now) if rule else None
+    return {'ok':True,'count':public['selectedCount'],'affectedCount':len(changes),'actionId':action_id,'ruleId':rule_id}

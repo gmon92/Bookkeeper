@@ -15,15 +15,28 @@ from zipfile import ZipFile, ZIP_DEFLATED
 import workspace_store
 
 
+def database_snapshot(database_path, destination_path):
+    with closing(sqlite3.connect(database_path)) as source, closing(sqlite3.connect(destination_path)) as destination:
+        source.backup(destination)
+        if destination.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='staged_imports'").fetchone():
+            destination.execute('DELETE FROM staged_imports')
+        destination.commit()
+
+
+def export_database(database_path):
+    """Return a consistent standalone SQLite file, including committed WAL data."""
+    with tempfile.TemporaryDirectory() as directory:
+        copy = Path(directory)/'bookkeeper.sqlite3'
+        database_snapshot(database_path,copy)
+        return copy.read_bytes()
+
+
 def create_backup(database_path, data_directory):
     result = io.BytesIO()
     with tempfile.TemporaryDirectory() as directory:
         copy = Path(directory) / 'bookkeeper.sqlite3'
-        with closing(sqlite3.connect(database_path)) as source, closing(sqlite3.connect(copy)) as destination:
-            source.backup(destination)
-            if destination.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='staged_imports'").fetchone():
-                destination.execute('DELETE FROM staged_imports')
-            destination.commit()
+        database_snapshot(database_path,copy)
+        with closing(sqlite3.connect(copy)) as destination:
             paths = [r[0] for r in destination.execute('SELECT stored_path FROM documents')]
             profile=workspace_store.profile_document(destination,'bookkeeper.sqlite3')
         manifest = {'version':1,'files':{},'missingSources':[]}

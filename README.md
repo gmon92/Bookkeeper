@@ -166,10 +166,21 @@ shown in All activity/Personal until assigned to a business.
   category batch. Nothing is applied while checked rows remain blocked.
 - Preview revisions detect intervening transaction or rule changes. Every
   applied batch has field history and can be reversed in **Data & storage**.
-- **Remember this merchant** can save a source-account-scoped rule with the batch.
-  The phrase must match every selected row. Choose All source accounts explicitly
-  to broaden scope. A saved rule survives undoing transaction changes and can be
-  paused independently.
+- **Save this decision as a rule** is available while categorizing a batch,
+  reviewing a business expense in the transaction drawer, or making a credit
+  decision. Choose **This account** or **All accounts in this profile**. The
+  description phrase must match the selected rows. Rules use that phrase and
+  money direction; unrelated activity on the account keeps its own decision.
+- Choose **Apply this decision automatically** to reuse the category/credit
+  handling and current review/totals choice on future imports. Unreviewed category
+  decisions stay awaiting review. Choose **Suggest this decision for review** to
+  keep future matches unapproved and outside totals. The preview explains the
+  saved rule, scope and reporting behavior before applying the batch.
+- A newly saved decision replaces prior rules for exactly the same description
+  conditions and account scope. Account-specific rules take precedence over an
+  all-account rule with the same description. More specific conditions and
+  conflicts continue to follow the rules described below. Saved rules survive
+  undoing transaction changes and can be edited or paused in Rules & automation.
 - **Merchant rules** lets you create, preview, edit, pause and enable rules.
   Existing rules start in Suggest only mode. Suggestions are computed for new/unreviewed activity; reviewed transactions
   remain in place. Conflicting destinations are flagged instead of choosing one.
@@ -265,7 +276,7 @@ Saved credit decisions, pair links and reporting effects have audit history and
 can be undone in **Data & storage**. Saved description rules remain available
 after undo and can be paused in **Credit rules**.
 
-Built-in description suggestions never automatically approve credits or include refunds. Saved credit rules start in Suggest only mode; their automation settings can be changed explicitly in Rules & automation. Existing imports and approvals are preserved during the schema
+Built-in description suggestions never automatically approve credits or include refunds. Saving a credit decision as a rule lets you explicitly reuse its approval and refund inclusion choice, or save a suggestion instead. Future rules never reuse transaction-specific payment or purchase links. Existing imports and approvals are preserved during the schema
 upgrade and appear in **Needs decision** until a specific credit decision is
 recorded. A business's normal ledger shows its assigned business activity and
 unassigned activity on its owned accounts. Transfers and credits placed outside
@@ -401,6 +412,12 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
   preview `revision`.
 - `GET /api/suggestions`, `GET /api/rules`, `POST /api/rules/preview`,
   `POST /api/rules` — local merchant rules and non-approving suggestions.
+- `GET /api/export.sqlite3` — download a consistent standalone SQLite snapshot
+  of the active profile, including committed WAL data, saved rules/preferences
+  and original row archives. Report filters do not limit this download. Staged
+  imports are omitted from the copy; original statement files stay in the profile
+  folder and are included by the full profile backup. Reports & exports provides
+  an **Export SQLite database** button.
 - `GET /api/automation` — unified rules, historical match counts, rule ideas and
   automation action statuses.
 - `POST /api/automation/rules/preview`, `POST /api/automation/rules` — preview/save
@@ -422,7 +439,9 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
   business/category and explicit `includeInTotals`. A single-credit decision
   may include `relatedId` (or null to unlink). Apply requires the preview
   `revision`. Optional `rememberRule`, `rulePattern`, `ruleAccountId` and
-  `ruleAllAccounts` create a suggestion rule.
+  `ruleAllAccounts` save a rule. `ruleMode` selects `suggest` (the API default),
+  `categorize`, or `review`. Category batch/transaction edits support the same
+  rule options; automatic review requires a reviewed current decision.
 
 Run the financial and source-retention regression checks with:
 

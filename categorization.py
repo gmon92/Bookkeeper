@@ -157,26 +157,22 @@ def plan(db, body, validate):
             exceptions.append({'id':row['id'],'description':row['description'],'reason':str(exc)})
     # Includes source state and effective suggestions, so a preview cannot be
     # applied after another edit or a changed rule produces a different result.
+    remembered_rule = None
     if body.get('rememberRule') and not exceptions:
         if mode != 'categorize': raise ValueError('Save rules from a chosen category, not from multiple suggestions.')
-        pattern = body.get('rulePattern','')
-        if not isinstance(pattern,str) or not 2 <= len(merchant_text(pattern)) or len(pattern.strip()) > 120:
-            raise ValueError('Enter a merchant phrase between 2 and 120 characters for the rule.')
         destinations = {c['new']['business_id'] for c in changes}
         if len(destinations) != 1: raise ValueError('A merchant rule needs a single destination business.')
-        account = body.get('ruleAccountId') or None
-        if not account and body.get('ruleAllAccounts') is not True:
-            raise ValueError('Choose the source account or explicitly choose all accounts for the rule.')
-        if any((' '+merchant_text(pattern)+' ') not in (' '+merchant_text(r['merchant'] or r['description'])+' ') or (account and r['account_id'] != account) for r in rows):
-            raise ValueError('The saved merchant phrase and account must match every selected row. Narrow the selection or edit the rule.')
-    revision = hashlib.sha256(json.dumps({'changes':changes,'exceptions':exceptions,'create':sorted(creates),'options':{k:v for k,v in body.items() if k!='revision'}},sort_keys=True).encode()).hexdigest()
+        remembered_rule = automation.decision_rule(db,body,rows,kind='expense',business=changes[0]['new']['business_id'],
+            category=changes[0]['new']['category_name'],reviewed=reviewed,include=include,allow_new_category=bool(creates))
+    rule_revision = {k:v for k,v in remembered_rule.items() if k!='id'} if remembered_rule else None
+    revision = hashlib.sha256(json.dumps({'changes':changes,'exceptions':exceptions,'create':sorted(creates),'rule':rule_revision,'options':{k:v for k,v in body.items() if k!='revision'}},sort_keys=True).encode()).hexdigest()
     accounts = {r['id']:r['nickname'] for r in db.execute('SELECT id,nickname FROM accounts')}
     businesses = {r['id']:r['display_name'] for r in db.execute('SELECT id,display_name FROM businesses')}
     public = {'revision':revision,'selectedCount':len(rows),'applicableCount':len(changes),'exceptionCount':len(exceptions),
               'amountCents':sum(c['amountCents'] for c in changes),'exceptions':exceptions,
               'accounts':sorted({accounts[c['accountId']] for c in changes}),
               'businesses':sorted({businesses[c['new']['business_id']] for c in changes}),
-              'newCategories':[{'businessId':b,'name':n} for b,n in sorted(creates)],
+              'newCategories':[{'businessId':b,'name':n} for b,n in sorted(creates)],'rememberedRule':remembered_rule,
               'rows':[{k:v for k,v in c.items() if k!='version'} for c in changes[:40]]}
     return public, changes, creates
 
@@ -190,10 +186,7 @@ def commit(db, body, handler, now):
     if not changes: raise ValueError('No transactions can receive these changes.')
     for business,name in creates:
         db.execute('INSERT INTO categories(id,business_id,name) VALUES(?,?,?)',(str(uuid.uuid4()),business,name))
-    if body.get('rememberRule'):
-        rule = rule_values(db,{'pattern':body['rulePattern'],'category':body['category'].strip(),'accountId':body.get('ruleAccountId'),'businessId':changes[0]['new']['business_id']})
-        db.execute('INSERT INTO merchant_rules(id,pattern,account_id,business_id,category_name,created_at) VALUES(?,?,?,?,?,?)',
-                   (str(uuid.uuid4()),rule['pattern'],rule['account_id'],rule['business_id'],rule['category_name'],now))
+    rule_id = automation.save_decision_rule(db,public['rememberedRule'],now) if public['rememberedRule'] else None
     action_id = str(uuid.uuid4())
     description = 'Apply merchant suggestions' if body.get('mode')=='suggestions' else 'Categorize '+str(len(changes))+' transactions as '+body['category'].strip()
     db.execute('INSERT INTO review_actions(id,action_type,description,created_at) VALUES(?,?,?,?)',(action_id,'batch_categorize',description,now))
@@ -205,4 +198,4 @@ def commit(db, body, handler, now):
         db.execute('UPDATE transactions SET '+','.join(k+'=?' for k in FIELDS)+',updated_at=? WHERE id=?',(*[new[k] for k in FIELDS],now,change['id']))
         handler.record_change(db,change['id'],change['old'],new,action_id,'categorize',now)
         db.execute('UPDATE transaction_history SET reason=? WHERE action_id=? AND transaction_id=?',(change['reason'],action_id,change['id']))
-    return {'ok':True,'actionId':action_id,'count':len(changes)}
+    return {'ok':True,'actionId':action_id,'count':len(changes),'ruleId':rule_id}

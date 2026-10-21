@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from statement_import import parse_statement
 from reports import excel_report, safe_text
-from backup import create_backup, restore_backup
+from backup import create_backup, restore_backup, export_database
 import categorization
 import credits
 import workspace_store
@@ -584,6 +584,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(200, [dict(r) for r in db.execute('SELECT * FROM transaction_history WHERE transaction_id=? ORDER BY rowid', (path.split('/')[3],))])
         if path == '/api/backup':
             return self.backup()
+        if path == '/api/export.sqlite3':
+            data = export_database(DB_PATH)
+            return self.download(data,'bookkeeper-database-'+dt.date.today().isoformat()+'.sqlite3','application/vnd.sqlite3')
         if path == '/api/export.xlsx':
             return self.export_excel()
         if path == "/api/export.csv":
@@ -951,6 +954,11 @@ class Handler(SimpleHTTPRequestHandler):
             self.validate_transaction(db, values)
             if any(values[k]!=current[k] for k in ('amount_cents','account_id','direction','transaction_kind')) and (current['related_transaction_id'] or db.execute('SELECT 1 FROM transactions WHERE related_transaction_id=?',(transaction_id,)).fetchone()):
                 raise ValueError('Unlink this transaction in Credits & payments before changing its amount, source account, movement or kind.')
+            if body.get('rememberRule') and (values['classification']!='business' or values['direction']!='debit' or values['transaction_kind'] not in {'expense','fee'}):
+                raise ValueError('Save category rules for business expenses here. Use Credits & payments to save credit decision rules.')
+            rule = automation.decision_rule(db,body,[values],kind='expense',business=values['business_id'],
+                category=values['category_name'],reviewed=values['status']=='approved',include=bool(values['include_in_totals']))
+            rule_id = automation.save_decision_rule(db,rule,now) if rule else None
             values["updated_at"] = now
             db.execute("""UPDATE transactions SET date=?,posted_date=?,description=?,merchant=?,account_id=?,amount_cents=?,direction=?,transaction_kind=?,classification=?,business_id=?,category_id=?,category_name=?,status=?,include_in_totals=?,excluded=?,notes=?,updated_at=? WHERE id=?""",
               (values["date"],values["posted_date"],values["description"],values["merchant"],values["account_id"],values["amount_cents"],values["direction"],values["transaction_kind"],values["classification"],values["business_id"],values["category_id"],values["category_name"],values["status"],values["include_in_totals"],values['excluded'],values["notes"],now,transaction_id))
@@ -958,7 +966,7 @@ class Handler(SimpleHTTPRequestHandler):
             new_state = {key: new_row[key] for key in columns}
             self.record_change(db,transaction_id,old_state,new_state,action_id,'edit',now)
             db.execute('UPDATE transaction_history SET reason=? WHERE action_id=?',('You explicitly saved this transaction in the editor. The chosen category is “'+new_row['category_name']+'”; amount '+format(Decimal(new_row['amount_cents'])/100,'.2f')+' USD and movement '+new_row['direction']+'.',action_id))
-        return self.send_json(200, {"ok": True, 'actionId':action_id})
+        return self.send_json(200, {"ok": True, 'actionId':action_id,'ruleId':rule_id})
 
     @staticmethod
     def validate_transaction(db, values, check_category=True):
