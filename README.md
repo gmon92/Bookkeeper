@@ -192,6 +192,28 @@ Statement category → Select all results → Categorize & assign**. Use merchan
 groups and saved rules for the repeat work in later imports. Selection is limited
 to the current filtered results and the server accepts up to 5,000 rows per batch.
 
+## Combine selected transaction groups into a rule
+
+In **Transactions** or **Review queue**, switch to **Merchant groups** and check
+several group cards. Choose **Create / add to rule** in the selection controls.
+The same action is available for selected groups in **Credits & payments**.
+
+- The picker lists the chosen merchants with checkboxes. Leave unwanted groups
+  out, then choose **Create a new combined rule** or an existing active merchant
+  rule of the same type.
+- Continue to the rule builder to confirm all merchant phrases, the source
+  account (or all accounts), category/credit decision and automation level.
+  Adding to an existing rule keeps its earlier phrases and other conditions.
+- Preview checks that every chosen transaction matches the proposed rule. If an
+  existing rule's account, source category or amount limits leave groups out,
+  adjust those conditions explicitly or return to the picker.
+- Save creates or updates one rule with up to 200 alternative merchant phrases.
+  Its future matches can contain any one phrase. Existing transaction decisions
+  are preserved; use the normal categorization/credit decision or existing-row
+  automation preview to change them.
+- **Save this decision as a rule** in category/credit batches also accepts several
+  merchants: one phrase per line, filled from the selected groups.
+
 ## Rules & automation
 
 Open the **Rules & automation** sidebar tab to manage expense and credit rules
@@ -439,7 +461,8 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
   business/category and explicit `includeInTotals`. A single-credit decision
   may include `relatedId` (or null to unlink). Apply requires the preview
   `revision`. Optional `rememberRule`, `rulePattern`, `ruleAccountId` and
-  `ruleAllAccounts` save a rule. `ruleMode` selects `suggest` (the API default),
+  `ruleAllAccounts` save a rule. `rulePatterns` can supply several merchant
+  phrases instead of the legacy `rulePattern` string. `ruleMode` selects `suggest` (the API default),
   `categorize`, or `review`. Category batch/transaction edits support the same
   rule options; automatic review requires a reviewed current decision.
 

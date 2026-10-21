@@ -1,15 +1,24 @@
 'use strict';
 
 function decisionRuleFields(prefix){
-  return '<section id="'+prefix+'-rule-section" class="quick-remember decision-rule"><label class="quick-check"><input type="checkbox" id="'+prefix+'-remember-rule"><span><strong>Save this decision as a rule</strong><small>Reuse it on future imports with a matching description.</small></span></label><div id="'+prefix+'-rule-fields" hidden><div class="field-grid"><label class="field">Description contains<input id="'+prefix+'-rule-pattern" minlength="2" maxlength="120" disabled placeholder="e.g. SHELL OIL"></label><label class="field">Apply this rule to<select id="'+prefix+'-rule-account" disabled></select></label></div><label class="field">On future matching transactions<select id="'+prefix+'-rule-mode" disabled><option value="apply">Apply this decision automatically</option><option value="suggest">Suggest this decision for review</option></select></label><p id="'+prefix+'-rule-help" class="field-hint"></p><p class="field-hint">Only matching descriptions are covered. Manage saved rules in Rules & automation. Undoing a transaction decision keeps its saved rule.</p></div></section>';
+  return '<section id="'+prefix+'-rule-section" class="quick-remember decision-rule"><label class="quick-check"><input type="checkbox" id="'+prefix+'-remember-rule"><span><strong>Save this decision as a rule</strong><small>Reuse it on future imports with a matching description.</small></span></label><div id="'+prefix+'-rule-fields" hidden><div class="field-grid"><label class="field">Description contains any of these phrases<textarea id="'+prefix+'-rule-pattern" rows="3" disabled placeholder="SHELL OIL&#10;EXXON"></textarea><span class="field-hint">One merchant phrase per line, up to 200. Any phrase can match.</span></label><label class="field">Apply this rule to<select id="'+prefix+'-rule-account" disabled></select></label></div><label class="field">On future matching transactions<select id="'+prefix+'-rule-mode" disabled><option value="apply">Apply this decision automatically</option><option value="suggest">Suggest this decision for review</option></select></label><p id="'+prefix+'-rule-help" class="field-hint"></p><p class="field-hint">Only matching descriptions are covered. Manage saved rules in Rules & automation. Undoing a transaction decision keeps its saved rule.</p></div></section>';
+}
+function decisionRuleGroups(rows){
+  const groups=new Map();for(const row of rows){const key=merchantGroupKey(row);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
+  const result=new Map();
+  for(const items of groups.values()){
+    const descriptions=items.map(t=>' '+(t.merchant||t.description).normalize('NFKC').toUpperCase().replace(/[^\p{L}\p{N}_]+/gu,' ').trim().replace(/\s+/g,' ')+' '),words=descriptions[0].trim().split(' ');
+    while(words.length&&(words.join(' ').length>120||!descriptions.every(d=>d.includes(' '+words.join(' ')+' '))))words.pop();
+    const pattern=words.join(' ');if(pattern.length<2)throw new Error('A selected group needs a clearer merchant description. Review its rows first.');
+    if(!result.has(pattern))result.set(pattern,{pattern,ids:[]});result.get(pattern).ids.push(...items.map(t=>t.id));
+  }
+  return [...result.values()];
 }
 function initializeDecisionRule(prefix,rows){
   $('#'+prefix+'-remember-rule').checked=false;$('#'+prefix+'-rule-mode').value='apply';
   const accounts=[...new Set(rows.map(t=>t.accountId))];
   $('#'+prefix+'-rule-account').innerHTML=quickOptions([...accounts.map(id=>[id,'This account: '+accountName(state.accounts.find(a=>a.id===id))]),['*','All accounts in this profile']],accounts.length===1?accounts[0]:'*');
-  const descriptions=rows.map(t=>' '+(t.merchant||t.description).normalize('NFKC').toUpperCase().replace(/[^\p{L}\p{N}_]+/gu,' ').trim().replace(/\s+/g,' ')+' '),words=descriptions[0].trim().split(' ');
-  while(words.length&&(words.join(' ').length>120||!descriptions.every(d=>d.includes(' '+words.join(' ')+' '))))words.pop();
-  $('#'+prefix+'-rule-pattern').value=words.join(' ').length>=2?words.join(' '):'';
+  try{$('#'+prefix+'-rule-pattern').value=decisionRuleGroups(rows).map(g=>g.pattern).join('\n');}catch(error){$('#'+prefix+'-rule-pattern').value='';}
 }
 function syncDecisionRule(prefix,reviewed,include,available=true){
   const section=$('#'+prefix+'-rule-section');if(!section)return;
@@ -22,13 +31,14 @@ function syncDecisionRule(prefix,reviewed,include,available=true){
 function decisionRulePayload(prefix,reviewed){
   if(!$('#'+prefix+'-remember-rule').checked)return {};
   const account=$('#'+prefix+'-rule-account').value;
-  return {rememberRule:true,rulePattern:$('#'+prefix+'-rule-pattern').value.trim(),ruleAccountId:account==='*'?null:account,ruleAllAccounts:account==='*',ruleMode:$('#'+prefix+'-rule-mode').value==='suggest'?'suggest':reviewed?'review':'categorize'};
+  return {rememberRule:true,rulePatterns:$('#'+prefix+'-rule-pattern').value.split('\n').map(p=>p.trim()).filter(Boolean),ruleAccountId:account==='*'?null:account,ruleAllAccounts:account==='*',ruleMode:$('#'+prefix+'-rule-mode').value==='suggest'?'suggest':reviewed?'review':'categorize'};
 }
 function decisionRulePreview(rule){
   if(!rule)return '';
   const scope=rule.account_id?accountName(state.accounts.find(a=>a.id===rule.account_id)):'All accounts in this profile';
   const behavior=rule.automation_mode==='suggest'?'Suggest for review; outside totals.':rule.automation_mode==='review'?'Apply and review automatically; '+(rule.include_expenses?'include in business expense totals.':'outside business expense totals.'):'Apply category automatically; awaiting review, outside totals.';
-  return '<div class="decision-rule-preview"><strong>Rule for future imports</strong><p>Description contains “'+e(rule.pattern)+'” · '+e(scope)+'</p><p>'+e(rule.treatment?creditLabels[rule.treatment]:rule.category_name)+' · '+e(behavior)+'</p>'+(rule.replacesRuleIds?.length?'<p>Replaces the previous rule for this description and account scope.</p>':'')+'<small>Existing transactions keep their current decisions. Related payment and refund links are chosen separately.</small></div>';
+  const phrases=JSON.parse(rule.conditions_json).patterns;
+  return '<div class="decision-rule-preview"><strong>Rule for future imports · '+phrases.length+' merchant phrase'+(phrases.length===1?'':'s')+'</strong><p>Description contains any of: '+phrases.map(p=>'“'+e(p)+'”').join(' OR ')+' · '+e(scope)+'</p><p>'+e(rule.treatment?creditLabels[rule.treatment]:rule.category_name)+' · '+e(behavior)+'</p>'+(rule.replacesRuleIds?.length?'<p>Replaces the previous rule for these descriptions and account scope.</p>':'')+'<small>Existing transactions keep their current decisions. Related payment and refund links are chosen separately.</small></div>';
 }
 document.querySelector('#include-help').insertAdjacentHTML('afterend',decisionRuleFields('edit'));
 
@@ -77,9 +87,10 @@ function updateQuickGroups(rows){
   target.hidden=triage.view!=='groups';$('#ledger-table-wrap').hidden=triage.view==='groups';
   const action=$('#quick-result-action');
   action.hidden=triage.view!=='groups'&&!triage.merchant&&triage.sourceGroup===null;
-  action.innerHTML='<div><strong>'+rows.length+' listed transactions'+(triage.view==='groups'?' across '+triage.groups.length+(source?' statement category groups':' merchant groups'):'')+'</strong><p>Your category and business choice will apply to every listed transaction. Current filters define this set.</p></div><button class="button button-ink" data-quick="categorize-listed"'+(!rows.length?' disabled':'')+'>Categorize all '+rows.length+'</button>'+(rows.some(t=>t.direction==='credit')?'<button class="button button-secondary" data-review-listed-credits>Handle credits ('+rows.filter(t=>t.direction==='credit').length+')</button>':'')+(triage.merchant||triage.sourceGroup!==null?'<button class="text-button" data-quick="back-groups">Back to groups</button>':'');
+  const pickedGroups=triage.groups.filter(([,items])=>items.some(t=>state.selected.has(t.id))).length;
+  action.innerHTML='<div><strong>'+rows.length+' listed transactions'+(triage.view==='groups'?' across '+triage.groups.length+(source?' statement category groups':' merchant groups'):'')+'</strong><p>Your category and business choice will apply to every listed transaction. Current filters define this set.</p></div><button class="button button-ink" data-quick="categorize-listed"'+(!rows.length?' disabled':'')+'>Categorize all '+rows.length+'</button><button class="button button-secondary" data-selected-groups-rule="transactions"'+(!state.selected.size?' disabled':'')+'>Create / add to rule ('+pickedGroups+' selected groups)</button>'+(rows.some(t=>t.direction==='credit')?'<button class="button button-secondary" data-review-listed-credits>Handle credits ('+rows.filter(t=>t.direction==='credit').length+')</button>':'')+(triage.merchant||triage.sourceGroup!==null?'<button class="text-button" data-quick="back-groups">Back to groups</button>':'');
   if(triage.view!=='groups')return;
-  target.innerHTML=triage.groups.length?'<div class="merchant-group-intro">'+(source?'Transactions are batched by the category description supplied in the original statement, across merchants and source accounts. Choose a batch to apply one decision to every listed transaction. Blank source categories form their own group.':'Choose Categorize entire group to make one decision for every transaction in that card. View rows lets you inspect the group first. Groups keep source accounts separate.')+'</div><div class="merchant-group-grid">'+triage.groups.map(([key,items],i)=>{
+  target.innerHTML=triage.groups.length?'<div class="merchant-group-intro">'+(source?'Transactions are batched by the category description supplied in the original statement, across merchants and source accounts. Choose a batch to apply one decision to every listed transaction. Blank source categories form their own group.':'Check several group cards, then choose Create / add to rule to combine their merchants. Categorize entire group handles one card. Groups keep source accounts separate.')+'</div><div class="merchant-group-grid">'+triage.groups.map(([key,items],i)=>{
     const t=items[0],selected=items.every(t=>state.selected.has(t.id)),cats=[...new Set(items.map(t=>t.category))],selectedCount=items.filter(t=>state.selected.has(t.id)).length;
     const sourceMerchants=new Set(items.map(merchantFamily)).size;
     return '<article class="merchant-group '+(selected?'selected':'')+'"><div class="merchant-group-top"><input type="checkbox" data-group-select="'+i+'" aria-label="Select '+(source?'statement category group ':'merchant group ')+e(label(t))+'"'+(selected?' checked':'')+'><span class="merchant-group-count">'+items.length+' transaction'+(items.length===1?'':'s')+(selectedCount&&!selected?' · '+selectedCount+' selected':'')+'</span><strong>'+money(items.reduce((n,r)=>n+r.amountCents,0))+'</strong></div><h3>'+e(label(t))+'</h3><p>'+e(source?[...new Set(items.map(r=>r.account))].join(', '):t.account)+'</p>'+(source?'<p class="source-group-merchants">'+sourceMerchants+' merchant'+(sourceMerchants===1?'':'s')+'</p>':'')+'<div class="merchant-group-categories">'+e(cats.length===1?cats[0]:cats.length+' categories')+'</div><div class="merchant-group-actions"><button class="text-button" data-group-open="'+i+'">View rows '+icon('arrow-right')+'</button><button class="button button-ink button-small" data-group-categorize="'+i+'">Categorize entire group ('+items.length+')</button>'+(items.some(t=>t.direction==='credit')?'<button class="text-button" data-review-group-credits="'+i+'">Handle credits ('+items.filter(t=>t.direction==='credit').length+')</button>':'')+'</div></article>';

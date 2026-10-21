@@ -164,7 +164,7 @@ def decision_rule(db, body, rows, *, kind, business=None, category='', treatment
     mode = body.get('ruleMode', 'suggest')
     if mode == 'review' and not reviewed:
         raise ValueError('Review the selected decision before automatically reviewing future matches.')
-    rule = values(db, {'type':kind, 'patterns':[body.get('rulePattern', '')], 'accountId':account,
+    rule = values(db, {'type':kind, 'patterns':body.get('rulePatterns',[body.get('rulePattern', '')]), 'accountId':account,
         'businessId':business, 'category':category, 'treatment':treatment, 'mode':mode,
         'includeInTotals':bool(include and mode=='review')}, allow_new_category=allow_new_category)
     if not rows or any(not matches(row,rule) for row in rows):
@@ -173,7 +173,7 @@ def decision_rule(db, body, rows, *, kind, business=None, category='', treatment
     # More specific rules retain their existing precedence.
     rule['replacesRuleIds'] = [saved['id'] for saved in all_rules(db)
         if saved['type']==kind and saved['account_id']==account
-        and [text(p) for p in conditions(saved).get('patterns',[saved['pattern']])]==[text(rule['pattern'])]
+        and {text(p) for p in conditions(saved).get('patterns',[saved['pattern']])}=={text(p) for p in conditions(rule)['patterns']}
         and not conditions(saved).get('sourceCategory')
         and conditions(saved).get('minCents') is None and conditions(saved).get('maxCents') is None]
     return rule
@@ -200,6 +200,7 @@ def save(db, body, now):
         db.execute('UPDATE '+table+' SET active=? WHERE id=?',(int(body['active']),body['id']))
         return {'ok':True}
     rule = values(db,body)
+    validate_selected_groups(db,body,rule)
     if body.get('id') and not db.execute('SELECT id FROM '+table+' WHERE id=?',(rule['id'],)).fetchone(): raise ValueError('Rule not found.')
     fields = ['pattern','account_id','business_id','category_name','conditions_json','automation_mode','include_expenses']
     if kind=='credit': fields.append('treatment')
@@ -211,9 +212,18 @@ def save(db, body, now):
     return {'ok':True,'id':rule['id']}
 
 
+def validate_selected_groups(db, body, rule):
+    if 'selectedIds' not in body: return
+    from categorization import selected_rows
+    selected = selected_rows(db,{'ids':body['selectedIds']})
+    if any(not matches(row,rule) for row in selected):
+        raise ValueError('Some selected groups do not match this rule. Check the merchant phrases, source account, original category and amount limits, or go back to leave those groups out.')
+
+
 def rule_preview(db, body):
     import credits
     rule = values(db,body)
+    validate_selected_groups(db,body,rule)
     matched = [r for r in rows(db) if matches(r,rule)]
     return {'matched':len(matched),'eligible':sum(eligible(db,r) for r in matched),'rows':[
         {'id':r['id'],'description':r['description'],'date':r['date'],'amountCents':r['amount_cents'],

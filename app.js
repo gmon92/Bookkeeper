@@ -116,6 +116,7 @@ function updateBatchBar() {
   const bar = $('#batch-bar'); if (!bar) return;
   const count = state.selected.size; bar.hidden = !count;
   bar.innerHTML = '<span><strong>' + count + '</strong> selected <small class="quick-shortcut">C to categorize</small></span><button class="button button-ink" data-quick="categorize">Categorize & assign</button>' + ([...state.selected].some(id=>state.suggestions?.[id]&&!state.suggestions[id].conflict)?'<button class="button button-secondary" data-quick="suggestions">Apply rule suggestions</button>':'') + '<button class="button button-secondary" data-batch="personal">Personal</button><button class="button button-secondary" data-batch="transfer">Transfer</button><button class="button button-secondary" data-batch="exclude">Exclude</button><button class="button button-secondary" data-batch="approve">Review only</button><button class="button button-ink" data-batch="include">Review & include</button><button class="icon-button" data-action="clear-selection" aria-label="Clear selection">' + icon('close') + '</button>';
+  bar.insertAdjacentHTML('beforeend','<button class="button button-secondary" data-selected-groups-rule="transactions">Create / add to rule</button>');
   const credits=state.transactions.filter(t=>state.selected.has(t.id)&&t.direction==='credit');
   if(credits.length)bar.insertAdjacentHTML('beforeend','<button class="button button-secondary" data-review-selected-credits>Handle selected credits ('+credits.length+')</button>');
 }

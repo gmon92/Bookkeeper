@@ -59,6 +59,59 @@ class DecisionRuleTests(unittest.TestCase):
         with server.connect() as db:
             self.assertEqual(categorization.suggestions(db)[row['id']]['category'],'Meals')
 
+    def test_multiple_merchant_groups_save_as_one_rule_and_match_independently(self):
+        result = self.categorize(ids=[self.fixture.ids['PLUS MEMBERSHIP'],self.fixture.ids['SUPPLIER PURCHASE']],
+            rulePatterns=['PLUS MEMBERSHIP','SUPPLIER PURCHASE'])
+        with server.connect() as db:
+            saved = next(r for r in automation.all_rules(db) if r['id']==result['ruleId'])
+            self.assertEqual(automation.conditions(saved)['patterns'],['PLUS MEMBERSHIP','SUPPLIER PURCHASE'])
+            self.assertEqual(db.execute('SELECT count(*) FROM merchant_rules WHERE active=1').fetchone()[0],1)
+        for description in ('PLUS MEMBERSHIP','SUPPLIER PURCHASE'):
+            row = self.import_row('card',description)
+            self.assertEqual((row['category_name'],row['status']),('Meals','approved'))
+        other = self.import_row('card','ANOTHER MERCHANT',amount='19.50')
+        self.assertEqual(other['status'],'needs_review')
+
+    def test_multiple_credit_groups_can_share_one_global_decision_rule(self):
+        self.fixture.apply({'ids':[self.fixture.ids['Platinum Walmart+ Credit'],self.fixture.ids['SUPPLIER REFUND']],
+            'treatment':'excluded_credit','rememberRule':True,'rulePatterns':['Walmart','SUPPLIER REFUND'],
+            'ruleAllAccounts':True,'ruleMode':'review'})
+        for account,description in (('card','Platinum Walmart+ Credit'),('bank','SUPPLIER REFUND')):
+            row = self.import_row(account,description,'credit')
+            self.assertEqual((row['credit_treatment'],row['excluded'],row['include_in_totals']),('excluded_credit',1,0))
+        with server.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM credit_rules WHERE active=1').fetchone()[0],1)
+
+    def test_add_selected_groups_to_an_existing_rule_preserves_old_phrases(self):
+        with server.connect() as db:
+            original = {'type':'expense','patterns':['PLUS MEMBERSHIP'],'accountId':'card',
+                'businessId':self.business,'category':'Meals','mode':'categorize'}
+            saved = automation.save(db,original,server.utc_now())
+            combined = original|{'id':saved['id'],'patterns':['PLUS MEMBERSHIP','SUPPLIER PURCHASE'],
+                'selectedIds':[self.fixture.ids['SUPPLIER PURCHASE']]}
+            preview = automation.rule_preview(db,combined)
+            self.assertEqual(preview['matched'],2)
+            automation.save(db,combined,server.utc_now())
+            self.assertEqual(db.execute('SELECT count(*) FROM merchant_rules').fetchone()[0],1)
+        for description in ('PLUS MEMBERSHIP','SUPPLIER PURCHASE'):
+            self.assertEqual(self.import_row('card',description)['category_name'],'Meals')
+
+    def test_existing_rule_scope_cannot_silently_leave_out_selected_groups(self):
+        with server.connect() as db:
+            body = {'type':'expense','patterns':['PLUS MEMBERSHIP'],'accountId':'card',
+                'businessId':self.business,'category':'Meals','mode':'categorize'}
+            saved = automation.save(db,body,server.utc_now())
+            invalid = body|{'id':saved['id'],'patterns':['PLUS MEMBERSHIP','CARD WITHDRAWAL'],
+                'selectedIds':[self.fixture.ids['CARD WITHDRAWAL']]}
+            with self.assertRaisesRegex(ValueError,'selected groups'):
+                automation.rule_preview(db,invalid)
+            with self.assertRaisesRegex(ValueError,'selected groups'):
+                automation.save(db,invalid,server.utc_now())
+            current = db.execute('SELECT pattern FROM merchant_rules WHERE id=?',(saved['id'],)).fetchone()[0]
+            self.assertEqual(current,'PLUS MEMBERSHIP')
+            # Explicitly broadening scope includes the chosen second account.
+            automation.rule_preview(db,invalid|{'accountId':None})
+
     def test_new_category_rule_preview_and_commit_are_consistent(self):
         self.categorize(category='Membership costs',createCategory=True)
         row = self.import_row('card','PLUS MEMBERSHIP')
