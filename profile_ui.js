@@ -37,8 +37,14 @@ function profileSettingsMarkup(){
 }
 function updateProfileBadge(){const badge=$('#active-profile-label'),p=state.health?.profile;if(!badge)return;badge.hidden=!p||state.setupRequired;badge.textContent=p?'Profile: '+p.name:'';badge.title=p?p.database+' · '+p.transactionCount+' transactions · '+p.ruleCount+' rules':'';}
 function profileScopeNotice(){return state.transactions.length&&!scopedTransactions().some(inYear)&&!['settings','automation'].includes(state.page)?'<div class="profile-scope-notice"><span>This profile has '+state.transactions.length+' transactions. Your current business or year filter hides them.</span><button type="button" class="text-button" data-profile-show-all>Show all profile transactions</button></div>':'';}
-function transactionSortControl(value,area){return '<label class="quick-sort transaction-sort">Sort<select data-transaction-sort="'+area+'" aria-label="Sort '+(area==='credits'?'credit transactions':'transactions')+'">'+quickOptions([['date-desc','Newest first'],['date-asc','Oldest first'],['amount-desc','Largest amount'],['amount-asc','Smallest amount'],['merchant','Merchant A–Z']],value)+'</select></label>';}
+function transactionSortControl(value,area,groups=false){return '<label class="quick-sort transaction-sort">Sort '+(groups?'groups':'transactions')+'<select data-transaction-sort="'+area+'" aria-label="Sort '+(groups?'groups':area==='credits'?'credit transactions':'transactions')+'">'+quickOptions(groups?[['date-desc','Newest activity'],['date-asc','Oldest activity'],['amount-desc','Largest total'],['amount-asc','Smallest total'],['merchant','Name A–Z']]:[['date-desc','Newest first'],['date-asc','Oldest first'],['amount-desc','Largest amount'],['amount-asc','Smallest amount'],['merchant','Merchant A–Z']],value)+'</select></label>';}
 function sortTransactionRows(rows,sort){return [...rows].sort((a,b)=>(sort==='amount-desc'?b.amountCents-a.amountCents:sort==='amount-asc'?a.amountCents-b.amountCents:sort==='merchant'?(a.merchant||a.description).localeCompare(b.merchant||b.description):sort==='date-asc'?a.date.localeCompare(b.date):b.date.localeCompare(a.date))||a.id.localeCompare(b.id));}
+function sortTransactionGroups(groups,sort,label){
+  // Sort the group itself by its displayed total, date range or label.
+  // Sorting only its member rows leaves the visible group order unchanged.
+  const summaries=groups.map(items=>({items,name:label(items[0]),total:items.reduce((sum,t)=>sum+t.amountCents,0),first:items.reduce((date,t)=>t.date<date?t.date:date,items[0].date),last:items.reduce((date,t)=>t.date>date?t.date:date,items[0].date),key:items.map(t=>t.id).sort()[0]}));
+  return summaries.sort((a,b)=>(sort==='amount-desc'?b.total-a.total:sort==='amount-asc'?a.total-b.total:sort==='merchant'?a.name.localeCompare(b.name):sort==='date-asc'?a.first.localeCompare(b.first):b.last.localeCompare(a.last))||a.name.localeCompare(b.name)||a.key.localeCompare(b.key)).map(group=>group.items);
+}
 document.addEventListener('input',event=>{if(event.target.closest('#books-setup-form')){captureSetup();const target=$('#profile-inspection');if(target&&!booksSetup.inspection)target.innerHTML='';}});
 document.addEventListener('click',async event=>{
   const el=event.target;
@@ -63,7 +69,15 @@ document.addEventListener('change',event=>{
   booksSetup.restoreFile=file||null;$('#books-restore-upload-name').textContent=file?'Selected: '+file.name:'No uploaded file selected.';
   $('[data-restore-clear-upload]').hidden=!file;
 });
-document.addEventListener('change',event=>{if(event.target.id==='profile-group-imports')saveProfilePreferences({groupImportsBySourceCategory:event.target.checked});if(event.target.matches('[data-transaction-sort]')){triage.sort=event.target.value;creditView.sort=event.target.value;saveProfilePreferences({sort:event.target.value});if(state.page==='credits')refreshCreditResults();else updateLedger();}});
+document.addEventListener('change',event=>{
+  const el=event.target;
+  if(el.id==='profile-group-imports')saveProfilePreferences({groupImportsBySourceCategory:el.checked});
+  if(!el.matches('[data-transaction-sort]'))return;
+  const area=el.dataset.transactionSort;
+  if(area.startsWith('batch-')){const kind=area.slice(6),batch=batchFor(kind);if(batch){batch.sort=el.value;renderBatchScope(kind);}return;}
+  triage.sort=el.value;creditView.sort=el.value;saveProfilePreferences({sort:el.value});
+  if(area==='credits')refreshCreditResults();else updateLedger();
+});
 document.addEventListener('submit',async event=>{
   if(event.target.id==='profile-name-form'){event.preventDefault();const form=event.target;busy(form,true);try{const result=await post('/api/profile/name',{name:$('#profile-name').value});state.health.profile=result.profile;await loadData({quiet:true});toast('Profile name saved.');}catch(error){showError(form,error);}finally{busy(form,false);}return;}
   if(event.target.id!=='books-setup-form')return;

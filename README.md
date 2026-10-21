@@ -257,6 +257,14 @@ actions. Selecting groups works in either layout. Use **Transactions** (or
 **Rows** in Credits & payments) for individual transaction rows. The group layout
 choice is saved per profile and included in database/reusable-ledger exports.
 
+The menu above the results changes to **Sort groups** in either group layout.
+Largest/smallest total uses each group's combined activity; newest activity uses
+its latest transaction and oldest activity uses its earliest transaction.
+Name A–Z uses the merchant or original statement category label. Individual
+transaction views sort their rows instead. The expanded **See all transactions**
+lists in category and credit decisions have their own **Sort transactions** menu;
+changing this order keeps the checked rows and pending decision unchanged.
+
 ## Combine selected transaction groups into a rule
 
 In **Transactions** or **Review queue**, switch to **Merchant groups** and check

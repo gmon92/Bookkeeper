@@ -95,7 +95,7 @@ function updateQuickGroups(rows){
   const source=triage.grouping==='sourceCategory';
   const label=t=>source?(t.sourceCategory||'No statement category'):merchantFamily(t);
   const grouped=new Map();for(const t of rows){const key=source?(t.sourceCategory||''):merchantGroupKey(t);if(!grouped.has(key))grouped.set(key,[]);grouped.get(key).push(t);}
-  triage.groups=[...grouped].sort((a,b)=>b[1].length-a[1].length||label(a[1][0]).localeCompare(label(b[1][0])));
+  triage.groups=sortTransactionGroups([...grouped.values()],triage.sort,label).map(items=>[source?(items[0].sourceCategory||''):merchantGroupKey(items[0]),items]);
   target.hidden=triage.view!=='groups';$('#ledger-table-wrap').hidden=triage.view==='groups';
   const action=$('#quick-result-action');
   action.hidden=triage.view!=='groups'&&!triage.merchant&&triage.sourceGroup===null;
