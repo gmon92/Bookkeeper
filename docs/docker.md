@@ -37,6 +37,14 @@ preferences and original statements.
 
 ## Bring an existing profile into Docker
 
+In the Docker app, choose **Restore export / backup** and use **Choose an
+exported profile file** to upload a reusable Excel ledger, a SQLite export or a
+profile backup ZIP from your browser (up to 20 MB). Set the new destination to
+`/data/profiles/Restored books`. Rules, categories, saved decisions and preferences
+resume in the new profile. A backup ZIP also transfers original statement files.
+
+For larger files, or to use a file already on the Docker host:
+
 The native app's Windows profile path is not visible inside a Linux container.
 Use the native app's **Download profile backup**, then copy that ZIP into the
 running Docker instance:
@@ -45,7 +53,7 @@ running Docker instance:
 docker compose cp "C:/Backups/my-profile.zip" bookkeeper:/data/import.zip
 ```
 
-In Docker's setup/profile screen, choose **Restore backup**:
+In Docker's setup/profile screen, choose **Restore export / backup**, then **Or choose a file already on the server**:
 
 - Backup: `/data/import.zip`
 - New destination: `/data/profiles/Restored books`

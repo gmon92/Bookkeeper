@@ -10,3 +10,5 @@
 .decision-rule{padding:14px 16px;border:1px solid #dfe5d5;border-radius:9px;background:#f7f9f2}.decision-rule>.quick-check{margin:0}.decision-rule [id$="-rule-fields"]{margin-top:14px}.decision-rule-preview{margin:16px 0;padding:14px 16px;border-left:3px solid #71895c;background:#f2f6e9;color:#3f5135;font-size:12px}.decision-rule-preview p{margin:8px 0}.decision-rule-preview small{font-size:10px;color:#6f7d5e}
 
 .database-export{display:flex;align-items:center;gap:24px;padding:24px;margin-top:24px}.database-export>div{flex:1}.database-export h2{font-size:16px;margin:0 0 10px}.database-export p{font-size:12px;line-height:1.7;color:#7c846e;margin:0}.database-export .button{flex:none}@media(max-width:700px){.database-export{align-items:flex-start;flex-direction:column}}
+
+.report-portable{padding:14px 18px;border:1px solid #dfe5d5;border-radius:9px;background:#f7f9f2;margin-bottom:20px}.report-portable small{max-width:760px;line-height:1.7}

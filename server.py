@@ -275,7 +275,14 @@ def configure_workspace(body):
     else:
         if directory.exists() and any(directory.iterdir()): raise ValueError('Copy books into a new or empty folder. Existing files are never overwritten.')
         if mode=='restore':
-            source=workspace_store.absolute_path(body.get('sourceDirectory'))
+            if body.get('contentBase64') is not None:
+                encoded=body['contentBase64']
+                if not isinstance(encoded,str): raise ValueError('Choose a profile export file to restore.')
+                try: content=base64.b64decode(encoded,validate=True)
+                except (ValueError,base64.binascii.Error) as exc: raise ValueError('The uploaded profile file could not be read.') from exc
+                if len(content)>MAX_UPLOAD_BYTES: raise ValueError('Profile upload exceeds 20 MB. Use a file path on the server for larger exports.')
+                source=io.BytesIO(content)
+            else: source=workspace_store.absolute_path(body.get('sourceDirectory'))
             restore_backup(source,directory,allow_empty=True)
         else:
             source=workspace_store.locate_books(body.get('sourceDirectory'))
@@ -1099,6 +1106,8 @@ class Handler(SimpleHTTPRequestHandler):
         query = parse_qs(urlparse(self.path).query)
         business = query.get('businessId',[''])[0]
         year = query.get('year',[''])[0]
+        portable=query.get('portable',['1'])[0]
+        if portable not in ('0','1'): raise ValueError('Choose whether to include reusable profile data.')
         if year and not re.fullmatch(r'\d{4}',year):
             return self.send_json(400, {'error':'Choose a valid reporting year.'})
         where, params = [], []
@@ -1114,10 +1123,11 @@ class Handler(SimpleHTTPRequestHandler):
             rows = db.execute('''SELECT t.*,a.nickname,a.last_four,d.filename,b.display_name AS business_name FROM transactions t
                 JOIN accounts a ON a.id=t.account_id LEFT JOIN documents d ON d.id=t.document_id LEFT JOIN businesses b ON b.id=t.business_id'''+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY t.date,t.id',params).fetchall()
         try:
-            data = excel_report(rows,label,year)
+            data = excel_report(rows,label,year,database=export_database(DB_PATH) if portable=='1' else None,
+                profile=active_profile() if portable=='1' else None)
         except ImportError:
             return self.send_json(503, {'error':'Install Excel support with python -m pip install -r requirements.txt.'})
-        return self.download(data,'bookkeeper-report.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        return self.download(data,'bookkeeper-ledger-with-profile.xlsx' if portable=='1' else 'bookkeeper-report.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
     def backup(self):
         # Serialize with imports so the database snapshot and document set agree.

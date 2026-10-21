@@ -30,6 +30,39 @@ The file-only page provides a link to the running Python app.
 The server versions interface assets by their content so a browser reload uses
 matching scripts/styles after an update instead of mixing cached older files.
 
+## Resume from exported books
+
+An exported **SQLite database** contains the full profile: all transactions and
+categorizations, credit decisions, merchant/credit rules with their account scopes
+and automation levels, categories, businesses, accounts, confirmed import layouts,
+view preferences, history and original row archives. Open it directly with **Open
+profile**, or use **Restore export / backup** to copy it into new books.
+
+Excel expense ledgers now default to **Include reusable profile** in Reports.
+The visible financial worksheets follow the business/year report filters. The
+embedded profile covers **every business and year**, which is stated beside the
+export button and on the workbook's **Profile Restore** tab. Uncheck the option
+to share just the filtered report without a profile copy. The profile uses a
+checksum-verified SQLite snapshot stored in workbook cells, so its rules and IDs
+resume exactly rather than being inferred from ledger labels or rounded amounts.
+
+To start a new session, open the profile chooser, select **Restore export /
+backup**, upload the exported `.xlsx` or `.sqlite3` file, and choose a new empty
+folder. The restored profile opens with its rules and categorization decisions;
+those rules continue running on future matching imports. The uploaded file can
+come from another local device or the browser connected to Docker.
+
+Editing the visible spreadsheet report does not change its embedded profile.
+Make decisions in the app and export a new copy. Older Excel reports, CSV ledgers,
+and reports exported without reusable profile data cannot recreate saved rules;
+restore a newer portable export or SQLite database instead. Excel embedding
+supports database snapshots up to 64 MB. Database exports have no Excel limit.
+
+Original statement **row data** is retained in the database and reusable ledger.
+Original statement **files** are included by **Download profile backup**; use that
+ZIP when you want those files transferred too. Restores always use new/empty
+folders and never merge or overwrite existing books.
+
 ## Profiles for each user
 
 A profile keeps its own books, saved rules, categories, source accounts, confirmed
@@ -38,13 +71,15 @@ import layouts and preferences. In **Data & storage → Open / switch profile**:
 - **Open profile:** choose a `.profile.json` file, a SQLite database (any filename),
   or an existing books folder. Use **Check location & saved rules** to see the
   database path, transaction count and rule count before opening it. SQL text
-  exports are not SQLite files; backup ZIPs use Restore backup.
+  exports are not SQLite files; reusable ledgers and backup ZIPs use Restore export / backup.
 - **Create profile:** choose a new or empty folder outside the app, a profile name
   and the first business name. Each user can create independent books and rules.
 - **Copy profile:** choose the source profile/database and a new empty destination.
   A consistent copy retains its rules and preferences. The source is preserved.
-- **Restore backup:** choose a profile backup ZIP and a new empty destination.
-  Checksums and database integrity are checked before the restored profile opens.
+- **Restore export / backup:** upload a reusable Excel ledger, exported SQLite
+  database or profile backup ZIP, or choose its path on the server. Select a new
+  empty destination. Checksums and database integrity are checked before opening.
+  Browser uploads support 20 MB; use a server file path for larger exports.
 
 The active profile name appears in the top bar. Data & storage shows its database,
 profile-file path, saved record counts and a profile-name editor. Recent profiles
@@ -402,7 +437,9 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
 - `GET /api/setup`, `POST /api/setup` — `mode` (`create`, `open`, `copy`, `restore`),
   `directory` (a profile/SQLite file/folder for open; a new destination folder
   otherwise), optional `profileName`, first `businessName` for create, and
-  `sourceDirectory` (source profile/database for copy or backup ZIP for restore).
+  `sourceDirectory` (source profile/database for copy, or SQLite/portable Excel/
+  backup ZIP path for restore). Restore can instead accept `contentBase64` for a
+  browser upload up to 20 MB; an uploaded file takes precedence over the path.
   `POST /api/setup/browse` accepts `kind` (`directory`, `file`, `backup`).
 - `POST /api/setup/inspect` — `path`; read-only profile record counts and database
   location before opening.
@@ -427,7 +464,9 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
 - `POST /api/review/undo` — `actionId`
 - `POST /api/duplicates/resolve` — `transactionId`, `canonicalId`,
   `decision` (`duplicate` or `distinct`)
-- `GET /api/export.xlsx`, `/api/export.csv` — optional `businessId`, `year`
+- `GET /api/export.xlsx`, `/api/export.csv` — optional `businessId`, `year`.
+  XLSX includes the full reusable profile by default (`portable=1`); use
+  `portable=0` for a report without profile data. CSV contains report rows only.
 - `GET /api/backup`
 - `POST /api/categorization/preview` and `/api/categorization/apply` — selected
   `ids`, category/business, review/inclusion choices; apply requires the returned

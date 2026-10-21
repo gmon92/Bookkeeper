@@ -194,7 +194,7 @@ if __name__ == '__main__' and len(sys.argv)>1 and sys.argv[1]=='browse':
     if kind=='directory': selected=filedialog.askdirectory(**options,mustexist=False)
     else:
         filters=[('Profile or SQLite database','*.profile.json *.sqlite3 *.sqlite *.db'),('All files','*.*')]
-        if kind=='backup': filters=[('Local Bookkeeper backup','*.zip')]
+        if kind=='backup': filters=[('Profile export or backup','*.zip *.xlsx *.sqlite3 *.sqlite *.db'),('All files','*.*')]
         selected=filedialog.askopenfilename(**options,filetypes=filters)
     root.destroy()
     print(selected)
