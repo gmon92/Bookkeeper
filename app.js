@@ -35,7 +35,7 @@ const paths = {
 const icon = name => '<svg viewBox="0 0 24 24" aria-hidden="true">' + (paths[name] || paths.file) + '</svg>';
 const e = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pageNames = { overview: 'Overview', review: 'Review queue', transactions: 'Transactions', credits: 'Credits & payments', automation: 'Rules & automation', imports: 'Imports', accounts: 'Accounts', reports: 'Reports', settings: 'Data & storage' };
-const state = { transactions: [], accounts: [], businesses: [], categories: [], documents: [], health: null, connected: false, ready: false, page: 'overview', workspace: 'all', year: 'all', query: '', account: '', tab: 'all', document: '', selected: new Set(), preview: null, batchAction: '', loadingFile: false, portableLedger: true };
+const state = { transactions: [], accounts: [], businesses: [], categories: [], documents: [], health: null, connected: false, ready: false, page: 'overview', workspace: 'all', year: 'all', query: '', account: '', tab: 'all', document: '', selected: new Set(), preview: null, batchAction: '', loadingFile: false, portableLedger: true, groupLayout:'cards' };
 
 
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => { el.innerHTML = icon(el.dataset.icon); }); }
@@ -116,7 +116,7 @@ function updateBatchBar() {
   const bar = $('#batch-bar'); if (!bar) return;
   const count = state.selected.size; bar.hidden = !count;
   bar.innerHTML = '<span><strong>' + count + '</strong> selected <small class="quick-shortcut">C to categorize</small></span><button class="button button-ink" data-quick="categorize">Categorize & assign</button>' + ([...state.selected].some(id=>state.suggestions?.[id]&&!state.suggestions[id].conflict)?'<button class="button button-secondary" data-quick="suggestions">Apply rule suggestions</button>':'') + '<button class="button button-secondary" data-batch="personal">Personal</button><button class="button button-secondary" data-batch="transfer">Transfer</button><button class="button button-secondary" data-batch="exclude">Exclude</button><button class="button button-secondary" data-batch="approve">Review only</button><button class="button button-ink" data-batch="include">Review & include</button><button class="icon-button" data-action="clear-selection" aria-label="Clear selection">' + icon('close') + '</button>';
-  bar.insertAdjacentHTML('beforeend','<button class="button button-secondary" data-selected-groups-rule="transactions">Create / add to rule</button>');
+  bar.insertAdjacentHTML('beforeend','<button class="button button-secondary" data-selected-groups-rule="transactions" data-rule-grouping="'+(triage.grouping==='sourceCategory'&&(triage.view==='groups'||triage.sourceGroup!==null)?'sourceCategory':'merchant')+'">Create / add to rule</button>');
   const credits=state.transactions.filter(t=>state.selected.has(t.id)&&t.direction==='credit');
   if(credits.length)bar.insertAdjacentHTML('beforeend','<button class="button button-secondary" data-review-selected-credits>Handle selected credits ('+credits.length+')</button>');
 }
@@ -189,7 +189,7 @@ async function loadData({quiet=false}={}) {
     Object.assign(state,{health,transactions,accounts,businesses,categories,documents,rules,suggestions,importProfiles,creditSuggestions,creditRules,automation:automationData,setupRequired:false,connected:true,ready:true});
     if(state.profileLoadedId!==health.workspaceId){
       resetProfileView();const settings=health.profile?.settings||{};
-      state.workspace=settings.workspace||'all';state.year=settings.year||'all';triage.sort=settings.sort||'date-desc';creditView.sort=triage.sort;
+      state.workspace=settings.workspace||'all';state.year=settings.year||'all';state.groupLayout=settings.groupLayout||'cards';triage.sort=settings.sort||'date-desc';creditView.sort=triage.sort;
       state.profileLoadedId=health.workspaceId;
     }
     if(!['all','personal',...businesses.map(b=>b.id)].includes(state.workspace))state.workspace='all';

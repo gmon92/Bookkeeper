@@ -9,6 +9,7 @@ import source_archive
 
 MODES = ('suggest', 'categorize', 'review')
 MAX_RULE_PHRASES = 200
+MAX_SOURCE_CATEGORIES = 200
 
 
 def initialize(db):
@@ -31,6 +32,11 @@ def conditions(rule):
     return json.loads(rule.get('conditions_json', '{}'))
 
 
+def source_categories(rule):
+    c = conditions(rule)
+    return c.get('sourceCategories', [c['sourceCategory']] if c.get('sourceCategory') else [])
+
+
 def source_category(row):
     if 'original_source_category' in row.keys(): return row['original_source_category'] or ''
     return source_archive.category(json.loads(row['source_raw_json']))
@@ -44,7 +50,7 @@ def matches(row, rule):
     return (rule['active'] and row['direction'] == movement
         and (not rule['account_id'] or rule['account_id'] == row['account_id'])
         and (not phrases or any(' '+text(p)+' ' in description for p in phrases))
-        and (not c.get('sourceCategory') or text(c['sourceCategory']) == text(source_category(row)))
+        and (not source_categories(rule) or text(source_category(row)) in {text(value) for value in source_categories(rule)})
         and (c.get('minCents') is None or row['amount_cents'] >= c['minCents'])
         and (c.get('maxCents') is None or row['amount_cents'] <= c['maxCents']))
 
@@ -52,14 +58,15 @@ def matches(row, rule):
 def rank(rule):
     c = conditions(rule)
     return (bool(c.get('patterns', [rule['pattern']])), bool(rule['account_id']),
-            bool(c.get('sourceCategory')), int(c.get('minCents') is not None)+int(c.get('maxCents') is not None))
+            bool(source_categories(rule)), int(c.get('minCents') is not None)+int(c.get('maxCents') is not None),
+            -len(source_categories(rule)))
 
 
 def reason(rule):
     c = conditions(rule)
     phrases = c.get('patterns', [rule['pattern']])
     parts = [('Description contains '+ ' or '.join('“'+p+'”' for p in phrases))] if phrases else []
-    if c.get('sourceCategory'): parts.append('original statement category equals “'+c['sourceCategory']+'”')
+    if source_categories(rule): parts.append('original statement category equals '+' or '.join('“'+value+'”' for value in source_categories(rule)))
     if rule['account_id']: parts.append('source account matches')
     if c.get('minCents') is not None: parts.append('amount ≥ '+format(c['minCents']/100, '.2f')+' USD')
     if c.get('maxCents') is not None: parts.append('amount ≤ '+format(c['maxCents']/100, '.2f')+' USD')
@@ -128,7 +135,11 @@ def values(db, body, allow_new_category=False):
     source = body.get('sourceCategory', '')
     if not isinstance(source,str) or len(source)>200: raise ValueError('Original category must be at most 200 characters.')
     source = source.strip()
-    if not patterns and not text(source): raise ValueError('Enter a merchant phrase or an original statement category.')
+    sources = body.get('sourceCategories', [source] if text(source) else [])
+    if not isinstance(sources,list) or len(sources)>MAX_SOURCE_CATEGORIES or any(not isinstance(s,str) or not text(s) or len(s.strip())>200 for s in sources):
+        raise ValueError('Choose up to '+str(MAX_SOURCE_CATEGORIES)+' nonblank original statement categories, each at most 200 characters.')
+    sources = list({text(s):s.strip() for s in sources}.values())
+    if not patterns and not sources: raise ValueError('Enter a merchant phrase or an original statement category.')
     low, high = cents(body.get('minAmount')), cents(body.get('maxAmount'))
     if low is not None and high is not None and low>high: raise ValueError('Minimum amount must not exceed maximum.')
     account = body.get('accountId') or None
@@ -147,8 +158,10 @@ def values(db, body, allow_new_category=False):
     include = body.get('includeInTotals', False)
     if type(include) is not bool: raise ValueError('Inclusion must be true or false.')
     if include and (mode!='review' or not needs_business): raise ValueError('Only an explicitly trusted business expense/refund rule can include totals.')
-    c = {'patterns':patterns,'sourceCategory':source,'direction':'credit' if kind=='credit' else 'debit','minCents':low,'maxCents':high}
-    return {'id':body.get('id') or str(uuid.uuid4()),'type':kind,'pattern':' | '.join(patterns) or source,
+    c = {'patterns':patterns,'sourceCategory':sources[0] if len(sources)==1 else '',
+        'direction':'credit' if kind=='credit' else 'debit','minCents':low,'maxCents':high}
+    if len(sources)>1: c['sourceCategories']=sources
+    return {'id':body.get('id') or str(uuid.uuid4()),'type':kind,'pattern':' | '.join(patterns or sources),
         'account_id':account,'business_id':business,'category_name':category,'treatment':treatment,'active':1,
         'automation_mode':mode,'conditions_json':json.dumps(c,sort_keys=True),'include_expenses':int(include)}
 
@@ -164,17 +177,20 @@ def decision_rule(db, body, rows, *, kind, business=None, category='', treatment
     mode = body.get('ruleMode', 'suggest')
     if mode == 'review' and not reviewed:
         raise ValueError('Review the selected decision before automatically reviewing future matches.')
-    rule = values(db, {'type':kind, 'patterns':body.get('rulePatterns',[body.get('rulePattern', '')]), 'accountId':account,
+    basis = body.get('ruleMatch','merchant')
+    if basis not in ('merchant','sourceCategory'): raise ValueError('Choose merchant descriptions or original statement categories for this rule.')
+    rule = values(db, {'type':kind, 'patterns':[] if basis=='sourceCategory' else body.get('rulePatterns',[body.get('rulePattern', '')]),
+        'sourceCategories':body.get('ruleSourceCategories',[]) if basis=='sourceCategory' else [], 'accountId':account,
         'businessId':business, 'category':category, 'treatment':treatment, 'mode':mode,
         'includeInTotals':bool(include and mode=='review')}, allow_new_category=allow_new_category)
     if not rows or any(not matches(row,rule) for row in rows):
-        raise ValueError('The rule description and account must match every selected transaction. Narrow the selection or edit the phrase.')
+        raise ValueError('The rule descriptions or original statement categories and account must match every selected transaction. Narrow the selection or edit the conditions.')
     # Replace a prior decision with exactly these conditions and account scope.
     # More specific rules retain their existing precedence.
     rule['replacesRuleIds'] = [saved['id'] for saved in all_rules(db)
         if saved['type']==kind and saved['account_id']==account
         and {text(p) for p in conditions(saved).get('patterns',[saved['pattern']])}=={text(p) for p in conditions(rule)['patterns']}
-        and not conditions(saved).get('sourceCategory')
+        and {text(s) for s in source_categories(saved)}=={text(s) for s in source_categories(rule)}
         and conditions(saved).get('minCents') is None and conditions(saved).get('maxCents') is None]
     return rule
 
@@ -234,7 +250,7 @@ def rule_preview(db, body):
 def overview(db):
     saved, existing = all_rules(db), rows(db)
     return {'rules':[r|{'conditions':conditions(r),'matchCount':sum(matches(t,r|{'active':1}) for t in existing)} for r in saved],
-            'proposals':proposals(existing, saved),'maxPatterns':MAX_RULE_PHRASES,
+            'proposals':proposals(existing, saved),'maxPatterns':MAX_RULE_PHRASES,'maxSourceCategories':MAX_SOURCE_CATEGORIES,
             'actionStatuses':{r['id']:r['status'] for r in db.execute("SELECT id,status FROM review_actions WHERE action_type='automation'")}}
 
 
