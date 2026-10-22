@@ -328,6 +328,13 @@ in one place. Existing saved rules retain their destinations and begin in
   amount bounds. All other
   supplied conditions must match together. Expense rules match money out; credit
   rules match money in.
+- Merchant rules use **contains** matching in the merchant name or full
+  transaction description, ignoring case and punctuation. Enter `Lowes` to match
+  `Lowes123`, `Lowes234`, or `CARD PURCHASE LOWES567`; no wildcard is needed.
+  Existing merchant rules use this behavior too. Original statement category
+  labels still match complete normalized labels. To change existing eligible
+  unreviewed transactions, choose **Run rule check**, inspect the preview, then
+  apply it. New imports use the saved rule's automation level automatically.
 - Choose the business/category or a credit treatment: payment, refund, statement
   benefit or other excluded credit. Refunds may belong to business books or stay
   outside them. Rules never automatically link payment pairs or original purchases.
