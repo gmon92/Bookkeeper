@@ -21,6 +21,7 @@ async function openProfileChooser(mode='open'){
   try{booksSetup.info=await api('/api/setup');Object.assign(booksSetup,{mode,directory:null,source:null,inspection:null,restoreFile:null,name:mode==='copy'?(booksSetup.info.profile?.name||'My books')+' copy':''});state.setupEditing=true;render();}catch(error){toast(error.message);}
 }
 function resetProfileView(){
+  Object.assign(suggestedBatchView,{expanded:false,pairsOpen:false,cards:[],pairs:[],workspaceId:null});
   Object.assign(state,{workspace:'all',year:'all',query:'',account:'',document:'',tab:'all',preview:null,groupLayout:'cards'});state.selected.clear();
   Object.assign(triage,{sourceCategory:'',category:'',classification:'',direction:'',from:'',to:'',min:'',max:'',focus:'all',merchant:'',sourceGroup:null,grouping:'merchant',view:'rows',sort:'date-desc',resultIds:null,bulk:null,rule:null});
   Object.assign(creditView,{tab:'needs',query:'',account:'',view:'groups',sort:'date-desc',bulk:null});creditView.selected.clear();

@@ -28,6 +28,7 @@ function syncBatchScope(kind){
     $('#credit-description').textContent=batch.ids.length+' selected · '+money(total)+' in money-in activity. '+(omitted?omitted+' left out of this batch. ':'')+'Preview the reporting effect before applying.';
   }
   $('#'+parts.submit).disabled=!!batch.busy||!batch.ids.length||!!batch.blocked;
+  if(kind==='category')syncBulkConsistency();
 }
 function changeBatchSelection(kind,ids){
   const batch=batchFor(kind);if(!batch||batch.busy)return;

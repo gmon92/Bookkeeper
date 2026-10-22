@@ -6,6 +6,7 @@ from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 
 import source_archive
+import consistency
 
 MODES = ('suggest', 'categorize', 'review')
 MAX_RULE_PHRASES = 200
@@ -56,10 +57,15 @@ def matches(row, rule):
 
 
 def rank(rule):
+    """Description conditions win before account, category, or amount specificity."""
     c = conditions(rule)
-    return (bool(c.get('patterns', [rule['pattern']])), bool(rule['account_id']),
+    return (has_merchant_condition(rule), bool(rule['account_id']),
             bool(source_categories(rule)), int(c.get('minCents') is not None)+int(c.get('maxCents') is not None),
             -len(source_categories(rule)))
+
+
+def has_merchant_condition(rule):
+    return bool(conditions(rule).get('patterns', [rule['pattern']]))
 
 
 def reason(rule):
@@ -77,14 +83,22 @@ def reason(rule):
 def choose(row, rules):
     found = [r for r in rules if matches(row, r)]
     if not found: return None
+    category_fallbacks = [r['id'] for r in found if not has_merchant_condition(r)]
     best = max(rank(r) for r in found)
     found = [r for r in found if rank(r) == best]
+    if any(consistency.rule_issue(r) for r in found):
+        return {'conflict': True, 'reason': consistency.RULE_MESSAGE, 'ruleIds': [r['id'] for r in found]}
     targets = {(r.get('treatment', ''), r['business_id'], r['category_name'], bool(r.get('include_expenses'))) for r in found}
     if len(targets) > 1:
         return {'conflict': True, 'reason': 'Equally specific rules disagree. Review the destination or pause a conflicting rule.', 'ruleIds': [r['id'] for r in found]}
     # Identical destinations use the least automatic setting when modes differ.
     rule = min(found, key=lambda r: MODES.index(r.get('automation_mode', 'suggest')))
-    return {'rule': rule, 'reason': reason(rule), 'ruleIds': [r['id'] for r in found], 'conflict': False}
+    explanation = reason(rule)
+    overridden = category_fallbacks if has_merchant_condition(rule) else []
+    if overridden:
+        explanation += ' Merchant description rules take priority over matching original-category rules.'
+    return {'rule': rule, 'reason': explanation, 'ruleIds': [r['id'] for r in found],
+            'overriddenRuleIds': sorted(overridden), 'conflict': False}
 
 
 def all_rules(db):
@@ -150,6 +164,7 @@ def values(db, body, allow_new_category=False):
     category = body.get('category', '')
     needs_business = kind=='expense' or (treatment=='refund' and bool(business))
     if needs_business:
+        if consistency.is_personal_category(category): raise ValueError(consistency.RULE_MESSAGE)
         if not db.execute('SELECT id FROM businesses WHERE active=1 AND id=?',(business,)).fetchone(): raise ValueError('Choose a business.')
         cat = db.execute('SELECT name FROM categories WHERE active=1 AND name=? COLLATE NOCASE AND (business_id=? OR business_id IS NULL)',(category,business)).fetchone()
         if (not cat and not allow_new_category) or 'uncategorized' in category.lower(): raise ValueError('Choose an existing expense category for this business.')
@@ -212,7 +227,9 @@ def save(db, body, now):
     table = 'merchant_rules' if kind=='expense' else 'credit_rules'
     if set(body)<= {'id','type','active'}:
         if type(body.get('active')) is not bool: raise ValueError('Choose whether this rule is enabled.')
-        if not db.execute('SELECT id FROM '+table+' WHERE id=?',(body.get('id'),)).fetchone(): raise ValueError('Rule not found.')
+        saved = db.execute('SELECT * FROM '+table+' WHERE id=?',(body.get('id'),)).fetchone()
+        if not saved: raise ValueError('Rule not found.')
+        if body['active']: consistency.validate_rule(saved)
         db.execute('UPDATE '+table+' SET active=? WHERE id=?',(int(body['active']),body['id']))
         return {'ok':True}
     rule = values(db,body)
@@ -249,7 +266,8 @@ def rule_preview(db, body):
 
 def overview(db):
     saved, existing = all_rules(db), rows(db)
-    return {'rules':[r|{'conditions':conditions(r),'matchCount':sum(matches(t,r|{'active':1}) for t in existing)} for r in saved],
+    return {'rules':[r|{'conditions':conditions(r),'matchCount':sum(matches(t,r|{'active':1}) for t in existing),
+                       'consistencyIssue':consistency.rule_issue(r)} for r in saved],
             'proposals':proposals(existing, saved),'maxPatterns':MAX_RULE_PHRASES,'maxSourceCategories':MAX_SOURCE_CATEGORIES,
             'actionStatuses':{r['id']:r['status'] for r in db.execute("SELECT id,status FROM review_actions WHERE action_type='automation'")}}
 
@@ -257,6 +275,7 @@ def overview(db):
 def proposals(existing, saved):
     groups = defaultdict(list)
     for r in existing:
+        if consistency.transaction_issue(r): continue
         if r['status']!='approved' or r['duplicate_of'] or not r['merchant'].strip(): continue
         if r['direction']=='debit' and r['classification']=='business' and r['transaction_kind'] in ('expense','fee'):
             kind, treatment = 'expense',''
@@ -270,7 +289,10 @@ def proposals(existing, saved):
         targets={(t,r['business_id'],r['category_name']) for r,t in items}
         if len(targets)!=1: continue
         row,treatment=items[0]
-        if any(matches(row,r) for r in saved): continue
+        # Category mappings are fallbacks, so they must not hide more precise
+        # merchant ideas. A conditional merchant rule may cover only some rows.
+        if all(any(has_merchant_condition(rule) and matches(member,rule) for rule in saved)
+               for member,_ in items): continue
         phrase=' '.join(row['merchant'].split())
         if not 2<=len(text(phrase))<=120: continue
         result.append({'type':'credit' if treatment else 'expense','patterns':[phrase],'accountId':row['account_id'],

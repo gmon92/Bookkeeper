@@ -41,7 +41,15 @@ const state = { transactions: [], accounts: [], businesses: [], categories: [], 
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => { el.innerHTML = icon(el.dataset.icon); }); }
 function money(cents = 0) { return (cents < 0 ? '−' : '') + (Math.abs(cents) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }); }
 function formatDate(value, options) { if (!value) return 'Date needs review'; const date = new Date(value.length === 10 ? value + 'T12:00:00' : value); return Number.isNaN(+date) ? value : date.toLocaleDateString('en-US', options || { month: 'short', day: 'numeric', year: 'numeric' }); }
-function isReview(t) { return ['needs_review', 'suggested'].includes(t.status); }
+function isReview(t) { return ['needs_review', 'suggested'].includes(t.status) || !!t.consistencyIssue; }
+function isPersonalCategory(name) { return String(name||'').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}_]+/gu,' ').trim()==='personal non business'; }
+function consistencyNotice() {
+  const rows=state.transactions.filter(t=>t.consistencyIssue), rules=(state.automation?.rules||[]).filter(r=>r.active&&r.consistencyIssue);
+  if(!rows.length&&!rules.length)return '';
+  const counted=rows.filter(included),amount=counted.reduce((sum,t)=>sum+contribution(t),0);
+  const description=(rows.length?rows.length+' transaction'+(rows.length===1?' has':'s have')+' a personal category in business books. ':'')+(counted.length?counted.length+' currently contribute '+money(amount)+' to expense totals. ':'')+(rules.length?rules.length+' enabled rule'+(rules.length===1?' has':'s have')+' '+(rows.length?'the same conflict.':'a personal category assigned to business books.')+' Conflicting rules are blocked from applying. ':'');
+  return '<section class="callout consistency-notice" role="status">'+icon('warning')+'<div><strong>Check personal classifications</strong><p>Across this profile: '+description+'Saved decisions stay in place until you correct them.</p><div class="consistency-actions">'+(rows.length?'<button class="button button-secondary button-small" data-consistency="transactions">Review transactions</button>':'')+(rules.length?'<button class="button button-secondary button-small" data-consistency="rules">Review rules</button>':'')+'</div></div></section>';
+}
 function included(t) { return !t.excluded && t.status === 'approved' && t.classification === 'business' && t.includeInTotals && ((t.direction === 'debit' && ['expense','fee'].includes(t.kind)) || (t.direction === 'credit' && t.kind === 'refund')) && !t.duplicateOf; }
 function contribution(t) { return t.direction === 'credit' ? -t.amountCents : t.amountCents; }
 function accountName(account) { return account.nickname + (account.last_four ? ' ···· ' + account.last_four : ''); }
@@ -57,7 +65,7 @@ function scopedAccounts() { return state.accounts.filter(a => state.workspace ==
 function scopedDocuments() { if (state.workspace === 'all') return state.documents; const ids = new Set(scopedTransactions().map(t => t.documentId)); return state.documents.filter(d => ids.has(d.id)); }
 function reportRows() { return scopedTransactions().filter(t => included(t) && inYear(t)); }
 function totalsByCategory(rows) { const groups = new Map(); for (const t of rows) groups.set(t.category || 'Uncategorized / review', (groups.get(t.category || 'Uncategorized / review') || 0) + contribution(t)); return [...groups].sort((a, b) => b[1] - a[1]); }
-function statusMarkup(t) { const review = isReview(t); const label = t.duplicateOf ? 'Duplicate' : review ? 'Needs review' : t.excluded ? 'Excluded' : 'Reviewed'; return '<span class="status ' + (review ? 'review' : t.excluded ? 'excluded' : '') + '"><i></i>' + label + '</span>'; }
+function statusMarkup(t) { const review = isReview(t); const label = t.duplicateOf ? 'Duplicate' : t.consistencyIssue ? 'Check classification' : review ? 'Needs review' : t.excluded ? 'Excluded' : 'Reviewed'; return '<span class="status ' + (review ? 'review' : t.excluded ? 'excluded' : '') + '"><i></i>' + label + '</span>'; }
 function signedMoney(t) { return (t.direction === 'unknown' ? '? ' : t.direction === 'credit' ? '+ ' : '− ') + money(t.amountCents); }
 function yearOptions() { const years = new Set([String(new Date().getFullYear()), ...state.transactions.map(t => /^\d{4}-/.test(t.date) ? t.date.slice(0, 4) : null).filter(Boolean)]); return '<option value="all">All years</option>' + [...years].sort().reverse().map(y => '<option value="' + y + '"' + (state.year === y ? ' selected' : '') + '>' + y + '</option>').join(''); }
 function yearSelect() { return '<select class="period-control" data-year aria-label="Reporting year">' + yearOptions() + '</select>'; }
@@ -96,9 +104,9 @@ function ledgerRow(t) {
 }
 function renderLedger() {
   const isQueue = state.page === 'review', tx = scopedTransactions().filter(inYear);
-  return heading(isQueue ? 'A little review. A lot of clarity.' : 'Every transaction, accounted for.', isQueue ? 'Check the source, choose where it belongs, and decide what enters your totals.' : 'The complete record, including personal items, transfers, and exclusions.', yearSelect() + button('Import statement', 'import', 'primary', 'plus'), isQueue ? 'PUT THE DETAILS IN PLACE' : 'YOUR EXPENSE LEDGER') +
+  return heading(isQueue ? 'A little review. A lot of clarity.' : 'Every transaction, accounted for.', isQueue ? 'Check the source, choose where it belongs, and decide what enters your totals.' : 'The complete record, including personal items, transfers, and exclusions.', yearSelect() + '<button class="button button-secondary" data-auto-run>Run rule check</button>' + button('Import statement', 'import', 'primary', 'plus'), isQueue ? 'PUT THE DETAILS IN PLACE' : 'YOUR EXPENSE LEDGER') +
     (state.document ? '<div class="filter-note">' + icon('file') + 'Showing rows from ' + e(state.documents.find(d => d.id === state.document)?.filename || 'a statement') + '<button class="text-button" data-action="clear-document">Clear filter</button></div>' : '') +
-    quickWorkbench() + '<section class="panel table-panel"><div class="table-toolbar">' + (isQueue ? '<span class="filter-note" style="margin:0">' + icon('review') + '<span id="queue-scope-count"></span></span>' : '<div class="segmented" role="group" aria-label="Transaction status">' + [['all','All transactions',tx.length],['approved','Reviewed',tx.filter(t=>t.status==='approved').length],['excluded','Excluded',tx.filter(t=>t.excluded).length]].map(([key,label,count])=>'<button data-tab="' + key + '" class="' + (state.tab===key?'active':'') + '" aria-pressed="' + (state.tab===key) + '">' + label + '<span>' + count + '</span></button>').join('') + '</div>') +
+    (isQueue?'<div id="suggested-batches"></div>':'') + quickWorkbench() + '<section class="panel table-panel"><div class="table-toolbar">' + (isQueue ? '<span class="filter-note" style="margin:0">' + icon('review') + '<span id="queue-scope-count"></span></span>' : '<div class="segmented" role="group" aria-label="Transaction status">' + [['all','All transactions',tx.length],['approved','Reviewed',tx.filter(t=>t.status==='approved').length],['excluded','Excluded',tx.filter(t=>t.excluded).length]].map(([key,label,count])=>'<button data-tab="' + key + '" class="' + (state.tab===key?'active':'') + '" aria-pressed="' + (state.tab===key) + '">' + label + '<span>' + count + '</span></button>').join('') + '</div>') +
     '<div class="toolbar-filters"><label class="search-field">' + icon('search') + '<input id="transaction-search" type="search" placeholder="Search merchant, notes… use | for OR" value="' + e(state.query) + '" aria-label="Search transactions"></label><select class="filter-select" id="account-filter" aria-label="Filter by account"><option value="">All accounts</option>' + scopedAccounts().map(a=>'<option value="' + e(a.id) + '"' + (state.account===a.id?' selected':'') + '>' + e(a.nickname) + '</option>').join('') + '</select>'+transactionSortControl(triage.sort,'ledger',triage.view==='groups')+'</div></div><div id="batch-bar" class="batch-bar" hidden></div><div id="merchant-groups" hidden></div><div class="table-wrap" id="ledger-table-wrap"><table class="ledger-table"><thead><tr><th class="select-cell"><input type="checkbox" id="select-all" aria-label="Select all visible transactions"></th><th>Transaction</th><th class="date-col">Date</th><th class="category-col">Category & books</th><th class="account-col">Source account</th><th style="text-align:right">Amount</th><th class="state-col">Review state</th><th></th></tr></thead><tbody id="ledger-body"></tbody></table></div><div class="table-caption"><span id="ledger-count"></span><span>Click any transaction to review its details</span></div></section>';
 }
 function updateLedger() {
@@ -111,6 +119,7 @@ function updateLedger() {
   const selectAll = $('#select-all'); selectAll.checked = rows.length>0 && rows.every(t=>state.selected.has(t.id)); selectAll.indeterminate = !selectAll.checked && rows.some(t=>state.selected.has(t.id));
   updateBatchBar();
   updateQuickGroups(rows);
+  refreshSuggestedBatches(rows);
 }
 function updateBatchBar() {
   const bar = $('#batch-bar'); if (!bar) return;
@@ -148,7 +157,7 @@ function render() {
   if(!state.ready){$('#page').innerHTML='<div class="loading-state"><span class="loading-ring"></span><p>Opening your profile and saved books…</p></div>';return;}
   setupGate(false);
   const renderers={overview:renderOverview,review:renderLedger,transactions:renderLedger,credits:renderCredits,automation:renderAutomation,imports:renderImports,accounts:renderAccounts,reports:renderReports,settings:renderSettings};
-  $('#page').innerHTML=profileScopeNotice()+(renderers[state.page]||renderOverview)();
+  $('#page').innerHTML=profileScopeNotice()+consistencyNotice()+(renderers[state.page]||renderOverview)();
   updateProfileBadge();
   $('#breadcrumb').textContent=pageNames[state.page];
   $$('[data-nav]').forEach(a=>{a.classList.toggle('active',a.dataset.nav===state.page); if(a.dataset.nav===state.page) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current');});
@@ -183,10 +192,10 @@ async function loadData({quiet=false}={}) {
   try {
     const health=await api('/api/health');state.health=health;
     if(health.setupRequired){Object.assign(state,{setupRequired:true,connected:false,ready:true,transactions:[],accounts:[],businesses:[],categories:[],documents:[],rules:[],suggestions:{},importProfiles:[]});booksSetup.info=health.setup;render();return;}
-    const [transactions,accounts,businesses,categories,documents,rules,suggestions,importProfiles,creditSuggestions,creditRules,automationData]=await Promise.all(['/api/transactions','/api/accounts','/api/businesses','/api/categories','/api/documents','/api/rules','/api/suggestions','/api/import-profiles','/api/credits/suggestions','/api/credits/rules','/api/automation'].map(path=>api(path)));
+    const [transactions,accounts,businesses,categories,documents,rules,suggestions,importProfiles,creditSuggestions,creditRules,automationData,reviewBatches]=await Promise.all(['/api/transactions','/api/accounts','/api/businesses','/api/categories','/api/documents','/api/rules','/api/suggestions','/api/import-profiles','/api/credits/suggestions','/api/credits/rules','/api/automation','/api/review/batches'].map(path=>api(path)));
     const current=await api('/api/health');
     if(current.workspaceId!==health.workspaceId)throw new Error('The profile changed while loading. Refresh to open the active profile.');
-    Object.assign(state,{health,transactions,accounts,businesses,categories,documents,rules,suggestions,importProfiles,creditSuggestions,creditRules,automation:automationData,setupRequired:false,connected:true,ready:true});
+    Object.assign(state,{health,transactions,accounts,businesses,categories,documents,rules,suggestions,importProfiles,creditSuggestions,creditRules,automation:automationData,reviewBatches,setupRequired:false,connected:true,ready:true});
     if(state.profileLoadedId!==health.workspaceId){
       resetProfileView();const settings=health.profile?.settings||{};
       state.workspace=settings.workspace||'all';state.year=settings.year||'all';state.groupLayout=settings.groupLayout||'cards';triage.sort=settings.sort||'date-desc';creditView.sort=triage.sort;
@@ -250,15 +259,17 @@ function setCategories(businessId,selected='') {
 }
 function syncEditor() {
   const form=$('#transaction-form'),classification=new FormData(form).get('classification'),kind=form.elements.kind.value,direction=form.elements.direction.value;
+  const personalConflict=classification==='business'&&isPersonalCategory(form.elements.category.value);
+  $('#edit-consistency-warning').hidden=!personalConflict;
   $('#edit-business-field').hidden=classification!=='business';
-  const valid=classification==='business'&&((direction==='debit'&&['expense','fee'].includes(kind))||(direction==='credit'&&kind==='refund'));
+  const valid=!personalConflict&&classification==='business'&&((direction==='debit'&&['expense','fee'].includes(kind))||(direction==='credit'&&kind==='refund'));
   form.elements.includeInTotals.disabled=!valid;if(!valid)form.elements.includeInTotals.checked=false;
-  $('#include-help').textContent=valid?'Inclusion is your explicit decision. Saving marks the transaction reviewed.':classification!=='business'?'Personal items and transfers remain outside business expense totals.':'Choose a transaction kind and money movement before including it in expense totals.';
+  $('#include-help').textContent=personalConflict?'Mark this transaction Personal or choose a business category before including it in totals.':valid?'Inclusion is your explicit decision. Saving marks the transaction reviewed.':classification!=='business'?'Personal items and transfers remain outside business expense totals.':'Choose a transaction kind and money movement before including it in expense totals.';
   syncEditorRule();
 }
 function syncEditorRule(){
   const form=$('#transaction-form'),classification=new FormData(form).get('classification');
-  syncDecisionRule('edit',true,form.elements.includeInTotals.checked,classification==='business'&&form.elements.direction.value==='debit'&&['expense','fee'].includes(form.elements.kind.value));
+  syncDecisionRule('edit',true,form.elements.includeInTotals.checked,classification==='business'&&!isPersonalCategory(form.elements.category.value)&&form.elements.direction.value==='debit'&&['expense','fee'].includes(form.elements.kind.value));
 }
 function openEditor(id) {
   const t=state.transactions.find(tx=>tx.id===id);if(!t)return;
@@ -271,7 +282,7 @@ function openEditor(id) {
   $('#edit-business').innerHTML=businessOptions(business);
   form.elements.direction.value=t.direction;form.elements.kind.value=t.kind;form.elements.notes.value=t.notes||'';
   const radio=$('input[name=classification][value="'+t.classification+'"]',form);if(radio)radio.checked=true;
-  setCategories(business,t.category);syncEditor();form.elements.includeInTotals.checked=included(t);syncEditorRule();
+  setCategories(business,t.category);form.elements.includeInTotals.checked=included(t);syncEditor();
   $('#editor-amount').innerHTML='<strong>'+signedMoney(t)+'</strong>'+statusMarkup(t);
   let creditPanel=$('#editor-credit-actions');if(!creditPanel){$('#editor-amount').insertAdjacentHTML('afterend','<div id="editor-credit-actions"></div>');creditPanel=$('#editor-credit-actions');}
   const related=state.transactions.find(r=>r.id===t.relatedTransactionId),refunds=state.transactions.filter(r=>r.relatedTransactionId===t.id&&r.creditTreatment==='refund');
@@ -287,12 +298,14 @@ function openEditor(id) {
   loadTransactionExplanation(id);
   showDialog('transaction-dialog');
 }
-function openBatch(action) {
-  const rows=state.transactions.filter(t=>state.selected.has(t.id));if(!rows.length)return;
+function openBatch(action,ids=[...state.selected]) {
+  const selected=new Set(ids),rows=state.transactions.filter(t=>selected.has(t.id));if(!rows.length)return;
   state.batchAction=action;
+  state.batchIds=rows.map(t=>t.id);
+  state.batchWorkspaceId=state.health?.workspaceId;
   const definitions={approve:['Mark these transactions reviewed?','This accepts the transaction data while keeping selected rows outside expense totals.'],include:['Review and include these expenses?','Existing business assignments are retained. Unassigned rows will be placed in the business you select.'],personal:['Move these items to Personal?','The source account stays attached. These transactions will remain outside business expense totals.'],transfer:['Mark these as transfers?','The selected rows stay in your ledger for reconciliation and are excluded from expense totals.'],exclude:['Keep these outside the totals?','These rows remain searchable, along with their original source documents.']};
   $('#batch-title').textContent=definitions[action][0];$('#batch-description').textContent=definitions[action][1];
-  const invalid=action==='include'?rows.filter(t=>t.direction==='unknown'||['unknown','transfer'].includes(t.kind)||['personal','transfer'].includes(t.classification)||/uncategorized/i.test(t.category)||t.duplicateOf):[];
+  const invalid=action==='include'?rows.filter(t=>t.direction==='unknown'||['unknown','transfer'].includes(t.kind)||['personal','transfer'].includes(t.classification)||isPersonalCategory(t.category)||/uncategorized/i.test(t.category)||t.duplicateOf):[];
   const duplicates=rows.filter(t=>t.duplicateCandidate);
   $('#batch-preview').innerHTML='<div class="batch-summary"><div><span>Affected rows</span><strong>'+rows.length+'</strong></div><div><span>Combined amount</span><strong>'+money(rows.reduce((n,t)=>n+t.amountCents,0))+'</strong></div></div><div class="batch-accounts"><strong>Source accounts</strong><ul class="batch-accounts-list">'+[...new Set(rows.map(t=>t.account))].map(a=>'<li>'+e(a)+'</li>').join('')+'</ul></div>'+
     (action==='include'&&rows.some(t=>t.classification==='unknown')?'<label class="field">Business for unassigned rows<select id="batch-business" required>'+businessOptions(!['all','personal'].includes(state.workspace)?state.workspace:state.businesses[0]?.id)+'</select></label>':'')+
@@ -303,6 +316,22 @@ function openBatch(action) {
 }
 
 document.addEventListener('click',event=>{
+  const check=event.target.closest('[data-consistency]');
+  if(check){
+    const action=check.dataset.consistency;
+    if(action==='editor-personal'){$('input[name="classification"][value="personal"]',$('#transaction-form')).checked=true;syncEditor();return;}
+    if(action==='bulk-personal'){
+      if(triage.bulk?.workspaceId!==state.health?.workspaceId){toast('The active profile changed. Reopen the categorization before saving.');return;}
+      if(triage.bulk?.ids.length){$('#categorize-dialog').close();openBatch('personal',triage.bulk.ids);}return;
+    }
+    state.workspace='all';$('#workspace-select').value='all';state.selected.clear();
+    if(action==='transactions'){
+      state.year='all';state.query='';state.account='';state.document='';state.tab='all';
+      Object.assign(triage,{resultIds:null,sourceCategory:'',category:'',classification:'',direction:'',from:'',to:'',min:'',max:'',focus:'consistency',merchant:'',sourceGroup:null,view:'rows'});
+      navigate('transactions');
+    }else if(action==='rules'){ruleDesk.query='';ruleDesk.category='';ruleDesk.type='all';navigate('automation');}
+    return;
+  }
   if(document.body.classList.contains('nav-open')&&!event.target.closest('.sidebar,#menu-button')){document.body.classList.remove('nav-open');$('#menu-button').setAttribute('aria-expanded','false');}
   const close=event.target.closest('[data-close]');if(close){$('#'+close.dataset.close).close();return;}
   const edit=event.target.closest('[data-edit]');if(edit&&!event.target.closest('input')){event.preventDefault();openEditor(edit.dataset.edit);return;}
@@ -338,7 +367,7 @@ document.addEventListener('change',event=>{
 });
 document.addEventListener('input',event=>{if(event.target.id==='transaction-search'){state.query=event.target.value;state.selected.clear();updateLedger();}});
 $('#workspace-select').addEventListener('change',event=>{state.workspace=event.target.value;state.selected.clear();state.document='';state.account='';state.query='';saveProfilePreferences({workspace:state.workspace});render();});
-$('#transaction-form').addEventListener('change',event=>{if(['classification','kind','direction'].includes(event.target.name))syncEditor();if(event.target.name==='businessId')setCategories(event.target.value,$('#edit-category').value);if(event.target.name==='accountId'){const all=$('#edit-rule-account').value==='*',account=state.accounts.find(a=>a.id===event.target.value);$('#edit-rule-account').innerHTML=quickOptions([[account.id,'This account: '+accountName(account)],['*','All accounts in this profile']],all?'*':account.id);}syncEditorRule();});
+$('#transaction-form').addEventListener('change',event=>{if(event.target.name==='businessId')setCategories(event.target.value,$('#edit-category').value);if(event.target.name==='accountId'){const all=$('#edit-rule-account').value==='*',account=state.accounts.find(a=>a.id===event.target.value);$('#edit-rule-account').innerHTML=quickOptions([[account.id,'This account: '+accountName(account)],['*','All accounts in this profile']],all?'*':account.id);}syncEditor();});
 $('#account-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget;busy(form,true);
   try{const data=Object.fromEntries(new FormData(form));data.businessId=data.businessId||null;const saved=await post('/api/accounts',data);await loadData({quiet:true});form.reset();$('#account-dialog').close();if($('#import-dialog').open){$('#import-account').innerHTML=accountOptions(saved.id);}toast('Source account added.');}catch(error){showError(form,error);}finally{busy(form,false);}
@@ -358,6 +387,7 @@ $('#transaction-form').addEventListener('submit',async event=>{
     if(!match)throw new Error('Enter an amount with no more than two decimal places.');
     const amountCents=Number(match[1])*100+Number((match[2]||'').padEnd(2,'0'));if(!Number.isSafeInteger(amountCents)||amountCents<=0)throw new Error('Enter a positive amount.');
     const includeInTotals=form.elements.includeInTotals.checked&&!form.elements.includeInTotals.disabled;
+    if(data.classification==='business'&&isPersonalCategory(data.category))throw new Error('Mark this transaction Personal, or choose a business category. Personal / non-business cannot be saved in business books.');
     if(includeInTotals&&/uncategorized/i.test(data.category))throw new Error('Choose an expense category before including this transaction in totals.');
     const saved=await post('/api/transactions/'+encodeURIComponent(data.id),{description:data.description,merchant:data.description,date:data.date,amountCents,accountId:data.accountId,businessId:data.classification==='business'?data.businessId:null,direction:data.direction,kind:data.kind,classification:data.classification,category:data.category,includeInTotals,notes:data.notes,status:'approved',...decisionRulePayload('edit',true)},'PATCH');
     $('#transaction-dialog').close();await loadData({quiet:true});toast((includeInTotals?'Reviewed and included in expense totals.':'Transaction reviewed and saved outside totals.')+(saved.ruleId?' Future-import rule saved.':''));
@@ -365,7 +395,7 @@ $('#transaction-form').addEventListener('submit',async event=>{
 });
 $('#batch-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget;busy(form,true);
-  try{await post('/api/review/batch',{ids:[...state.selected],action:state.batchAction,businessId:$('#batch-business')?.value});state.selected.clear();$('#batch-dialog').close();await loadData({quiet:true});toast('Your review changes were saved.');}catch(error){showError(form,error);}finally{busy(form,false);}
+  try{if(state.batchWorkspaceId!==state.health?.workspaceId)throw new Error('The active profile changed. Reopen this confirmation before saving.');await post('/api/review/batch',{ids:state.batchIds,action:state.batchAction,businessId:$('#batch-business')?.value});state.selected.clear();$('#batch-dialog').close();await loadData({quiet:true});toast('Your review changes were saved.');}catch(error){showError(form,error);}finally{busy(form,false);}
 });
 $('#file-input').addEventListener('change',event=>{readStatement(event.target.files[0]);event.target.value='';});
 document.addEventListener('dragover',event=>{const zone=event.target.closest('#dropzone');if(zone){event.preventDefault();zone.classList.add('drag-over');}});
@@ -391,7 +421,7 @@ async function loadReviewActions(){
 document.addEventListener('click',async event=>{
   const undo=event.target.closest('[data-undo]');if(!undo)return;
   undo.disabled=true;
-  try{const result=await post('/api/review/undo',{actionId:undo.dataset.undo});await loadData({quiet:true});toast(result.restored.length+' rows restored; '+result.conflicts.length+' later-edited rows kept for review.');}catch(error){toast(error.message);undo.disabled=false;}
+  try{const result=await post('/api/review/undo',{actionId:undo.dataset.undo});await loadData({quiet:true});toast(result.restored.length+' rows restored; '+result.conflicts.length+' rows kept because of later edits or consistency conflicts.');}catch(error){toast(error.message);undo.disabled=false;}
 });
 
 document.addEventListener('click',async event=>{

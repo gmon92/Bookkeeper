@@ -13,6 +13,8 @@
 !source_archive.py
 !import_evidence.py
 !automation.py
+!consistency.py
+!review_batches.py
 !index.html
 !app.js
 !profile_ui.js
@@ -22,6 +24,7 @@
 !source.js
 !credits.js
 !automation.js
+!suggested_batches.js
 !styles.css
 !setup.css
 !categorize.css
