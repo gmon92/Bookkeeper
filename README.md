@@ -227,6 +227,44 @@ Statement category → Select all results → Categorize & assign**. Use merchan
 groups and saved rules for the repeat work in later imports. Selection is limited
 to the current filtered results and the server accepts up to 5,000 rows per batch.
 
+## Statement category rules and group layouts
+
+In **Transactions** or **Review queue**, choose **Statement category groups**.
+Use **Create statement category rule** on a card (**Create category rule** in
+Details), or check several groups and choose **Create / add to category rule**.
+The picker lists original statement category labels, rather than merchant names.
+It can create a new category rule or add labels to an existing category rule.
+
+Choose **Money out** for expense categorization or **Money in** for credit
+handling. A mixed group has separate rules for its charges and credits. In the
+builder, choose business/category or credit treatment, source account or all
+accounts, and an automation level. Leave merchant descriptions blank to match
+new merchants carrying those original labels. Up to 200 statement categories
+can share a rule; any listed label matches, ignoring case and punctuation.
+Preview checks that all chosen rows fit the conditions before saving.
+
+While categorizing or deciding credits, **Save this decision as a rule** also
+lets you choose **Original statement categories** as the matching basis. Rules
+use retained original categories, independently of the editable bookkeeping
+category. Blank source categories cannot create a catch-all category rule.
+Merchant-specific rules can still provide exceptions; a single-category rule
+outranks a multi-category rule when the other conditions are equally specific.
+
+Group views now provide **Cards / Details**. Details shows one merchant,
+statement category or credit group per table row, with counts, amounts, source
+accounts, current categories/decisions, checkboxes and the same review/rule
+actions. Selecting groups works in either layout. Use **Transactions** (or
+**Rows** in Credits & payments) for individual transaction rows. The group layout
+choice is saved per profile and included in database/reusable-ledger exports.
+
+The menu above the results changes to **Sort groups** in either group layout.
+Largest/smallest total uses each group's combined activity; newest activity uses
+its latest transaction and oldest activity uses its earliest transaction.
+Name A–Z uses the merchant or original statement category label. Individual
+transaction views sort their rows instead. The expanded **See all transactions**
+lists in category and credit decisions have their own **Sort transactions** menu;
+changing this order keeps the checked rows and pending decision unchanged.
+
 ## Combine selected transaction groups into a rule
 
 In **Transactions** or **Review queue**, switch to **Merchant groups** and check
@@ -256,8 +294,9 @@ in one place. Existing saved rules retain their destinations and begin in
 **Suggest only** mode.
 
 - Create rules from any category card, or choose **Create rule**. Add up to 200
-  merchant phrases (one per line; any phrase can match), an exact original
-  statement category, source account and optional USD amount bounds. All other
+  merchant phrases (one per line; any phrase can match), up to 200 original
+  statement categories (any label can match), source account and optional USD
+  amount bounds. All other
   supplied conditions must match together. Expense rules match money out; credit
   rules match money in.
 - Choose the business/category or a credit treatment: payment, refund, statement
@@ -482,7 +521,8 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
 - `GET /api/automation` — unified rules, historical match counts, rule ideas and
   automation action statuses.
 - `POST /api/automation/rules/preview`, `POST /api/automation/rules` — preview/save
-  expense or credit rules with `patterns`, `sourceCategory`, `accountId`, optional
+  expense or credit rules with `patterns`, `sourceCategories` (or legacy
+  `sourceCategory` for one label), `accountId`, optional
   `minAmount`/`maxAmount`, business/category or credit treatment, `mode`
   (`suggest`, `categorize`, `review`) and explicit `includeInTotals`.
   `id`, `type` and boolean `active` pause/enable an existing rule.
@@ -500,7 +540,9 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
   business/category and explicit `includeInTotals`. A single-credit decision
   may include `relatedId` (or null to unlink). Apply requires the preview
   `revision`. Optional `rememberRule`, `rulePattern`, `ruleAccountId` and
-  `ruleAllAccounts` save a rule. `rulePatterns` can supply several merchant
+  `ruleAllAccounts` save a rule. `ruleMatch=sourceCategory` and
+  `ruleSourceCategories` save the decision by original statement category.
+  `rulePatterns` can supply several merchant
   phrases instead of the legacy `rulePattern` string. `ruleMode` selects `suggest` (the API default),
   `categorize`, or `review`. Category batch/transaction edits support the same
   rule options; automatic review requires a reviewed current decision.

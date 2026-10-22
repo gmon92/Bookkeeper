@@ -33,7 +33,9 @@ class ProfileExportTests(unittest.TestCase):
             automation.save(db,{'type':'expense','patterns':['SUPPLIER PURCHASE','PLUS MEMBERSHIP'],
                 'accountId':'card','businessId':self.fixture.business,'category':'Meals','mode':'review','includeInTotals':True},server.utc_now())
             workspace_store.save_profile(db,server.DB_PATH,name='Portable example')
-            workspace_store.save_profile_settings(db,{'sort':'merchant','groupImportsBySourceCategory':True,'workspace':'all','year':'all'})
+            workspace_store.save_profile_settings(db,{'sort':'merchant','groupImportsBySourceCategory':True,'workspace':'all','year':'all','groupLayout':'details'})
+            automation.save(db,{'type':'expense','patterns':[],'sourceCategories':['Travel','Transport'],
+                'accountId':'card','businessId':self.fixture.business,'category':'Fuel','mode':'review','includeInTotals':False},server.utc_now())
             db.execute("INSERT INTO import_profiles VALUES('layout','card','example-layout','Example','csv','{}',?,1)",(server.utc_now(),))
             db.execute("INSERT INTO businesses(id,legal_name,display_name,created_at) VALUES('other','Other books','Other books',?)",(server.utc_now(),))
             db.execute("INSERT INTO accounts(id,nickname,business_id) VALUES('other-account','Another account','other')")
@@ -67,12 +69,15 @@ class ProfileExportTests(unittest.TestCase):
         return target
 
     def assert_future_automation(self):
-        self.fixture.import_csv('card',b'Date,Description,Debit,Credit\n11/01/2026,SUPPLIER PURCHASE,17.25,\n11/02/2026,Platinum Walmart+ Credit,,9.50\n')
+        self.fixture.import_csv('card',b'Date,Description,Debit,Credit,Category\n11/01/2026,SUPPLIER PURCHASE,17.25,,Supplies\n11/02/2026,Platinum Walmart+ Credit,,9.50,Benefits\n11/03/2026,UNSEEN VEHICLE STORE,40.50,,Travel\n')
         with server.connect() as db:
             charge=db.execute("SELECT * FROM transactions WHERE date='2026-11-01'").fetchone()
             credit=db.execute("SELECT * FROM transactions WHERE date='2026-11-02'").fetchone()
             self.assertEqual((charge['category_name'],charge['status'],charge['include_in_totals']),('Meals','approved',1))
             self.assertEqual((credit['credit_treatment'],credit['status'],credit['include_in_totals']),('statement_credit','approved',0))
+            vehicle=db.execute("SELECT * FROM transactions WHERE date='2026-11-03'").fetchone()
+            self.assertEqual((vehicle['category_name'],vehicle['status'],vehicle['include_in_totals']),('Fuel','approved',0))
+        self.assertEqual(server.active_profile()['settings']['groupLayout'],'details')
 
     def test_sqlite_export_resumes_every_table_rules_and_future_imports(self):
         before=self.table_state()
@@ -97,7 +102,7 @@ class ProfileExportTests(unittest.TestCase):
         self.reopen(content,'.xlsx',upload=True)
         self.assertEqual(self.table_state(),before)
         self.assertEqual(server.active_profile()['settings']['groupImportsBySourceCategory'],True)
-        self.assertEqual(server.active_profile()['ruleCount'],2)
+        self.assertEqual(server.active_profile()['ruleCount'],3)
         self.assert_future_automation()
 
     def test_restored_excel_profile_survives_another_session_open(self):
@@ -106,7 +111,7 @@ class ProfileExportTests(unittest.TestCase):
         location=workspace_store.locate_books(saved['profile'])
         server.activate_workspace(location['directory'],database=location['database'],profile=location['profile'])
         self.assertEqual(server.DB_PATH,target/'bookkeeper.sqlite3')
-        self.assertEqual(server.active_profile()['ruleCount'],2)
+        self.assertEqual(server.active_profile()['ruleCount'],3)
         self.assert_future_automation()
 
     def test_plain_ledger_can_be_shared_without_any_profile_payload(self):
