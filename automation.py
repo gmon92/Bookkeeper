@@ -46,11 +46,11 @@ def source_category(row):
 def matches(row, rule):
     c = conditions(rule)
     movement = c.get('direction', 'credit' if rule.get('treatment') else 'debit')
-    phrases = c.get('patterns', [rule['pattern']])
-    description = ' '+text(row['merchant'] or row['description'])+' '
+    phrases = [text(p) for p in c.get('patterns', [rule['pattern']])]
+    descriptions = [text(row['merchant'] or ''), text(row['description'] or '')]
     return (rule['active'] and row['direction'] == movement
         and (not rule['account_id'] or rule['account_id'] == row['account_id'])
-        and (not phrases or any(' '+text(p)+' ' in description for p in phrases))
+        and (not phrases or any(phrase and any(phrase in description for description in descriptions) for phrase in phrases))
         and (not source_categories(rule) or text(source_category(row)) in {text(value) for value in source_categories(rule)})
         and (c.get('minCents') is None or row['amount_cents'] >= c['minCents'])
         and (c.get('maxCents') is None or row['amount_cents'] <= c['maxCents']))
