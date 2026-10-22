@@ -158,6 +158,35 @@ shown in All activity/Personal until assigned to a business.
 
 ## Fast categorization
 
+**Review queue → Suggested batches** groups pending services and vehicle charges,
+sets aside general-retailer purchases for receipt review, and highlights possible
+refunds or rewards offsets. Cards show the affected count and amount, why rows
+were grouped, and a question about their purpose. The panel follows the current
+business, year, account, search, and other transaction filters. Use **Show all
+batches** for the remaining groups and expand **Possible refunds and offsets**
+to compare credits with earlier purchases.
+
+**Review charges** opens the existing checked-row categorization dialog with a
+category suggestion where appropriate; review and totals inclusion stay unchecked.
+**Personal…** opens a separate confirmation. Credit comparisons show candidate
+purchases without linking or changing them. Inspect a purchase and return to the
+credit decision, then explicitly choose its treatment and any related link.
+These suggestions run locally without an AI service or internet connection.
+Groups and candidates are recomputed after edits; reading the panel never saves
+a transaction decision or rule.
+
+The app checks for **Personal / non-business** categories that are still assigned
+to business books. Existing conflicts appear in a profile-wide notice, the
+Review queue, and the **Check classification** filter, including previously
+reviewed transactions. The notice shows how much is currently included in
+expense totals. Saved decisions and totals stay in place until you correct them.
+Open a flagged transaction and choose **Mark Personal**, then save, or choose a
+business category. Quick categorization offers **Move checked rows to Personal**
+with a separate confirmation. These checks also block new conflicting business
+rules and prevent existing conflicting rules from applying on import; pause or
+edit those rules in Rules & automation. Undo keeps a correction in place if its
+old state would recreate the conflict.
+
 **Transactions** and **Review queue** now have a shared categorization workspace:
 
 - Quick filters for uncategorized, unassigned, rule suggestions, duplicates and
@@ -307,7 +336,7 @@ in one place. Existing saved rules retain their destinations and begin in
   **Auto-review** requires the explicit trusted-rule checkbox. Including eligible
   business expenses/refunds in totals requires another separate checkbox.
 - Preview historical matches before saving. Saving a rule affects future imports;
-  it does not silently change existing rows. **Preview rules on existing rows**
+  it does not silently change existing rows. **Run rule check**
   shows the exact proposed changes across all books and years before applying.
   Reviewed, excluded, linked and possible duplicate rows remain in place.
 - Rules with merchant phrases outrank broad original-category mappings. Within
@@ -315,8 +344,23 @@ in one place. Existing saved rules retain their destinations and begin in
   by original-category and amount conditions. Equally specific conflicting
   destinations stay for review. Identical destinations use the least automatic
   setting when their automation levels differ.
+
+To run a rule pass on the current database, choose **Run rule check** at the top
+of **Review queue**, **Transactions** or **Rules & automation**, inspect the
+results, then choose **Apply this preview** to commit automatic decisions. This
+checks eligible rows across the
+entire active profile, regardless of the business/year filters on screen. It
+preserves already-reviewed decisions, including rows previously auto-reviewed by
+a trusted rule. Suggest-only matches are available in **Transactions → Rule
+suggestions** or **Credits & payments** and require their separate review action.
+The pass runs automatically on new rows when an import is confirmed. Saving a
+rule does not rerun it across existing rows, and no background sweep is scheduled.
+
 - **Rule ideas** are generated from at least two consistent reviewed decisions
-  for a merchant/account. Review and save each idea yourself before it can run.
+  for a merchant/account. Find them in **Rules & automation → View rule ideas**,
+  or scroll to **Combine rule ideas by category** on that page. Review and save
+  each idea yourself before it can run. Broad original-category rules do not hide
+  more precise merchant ideas; active merchant rules covering all examples do.
 - **Combine rule ideas by category** collects store ideas for the same category,
   business and source account. Choose a Meals, Fuel or other group, then check
   the stores to accept together. Search the list, select all shown stores, leave

@@ -45,6 +45,7 @@ function decisionRulePreview(rule){
   return '<div class="decision-rule-preview"><strong>Rule for future imports · '+labels.length+(source?' statement categor'+(labels.length===1?'y':'ies'):' merchant phrase'+(labels.length===1?'':'s'))+'</strong><p>'+(source?'Original statement category equals any of: ':'Description contains any of: ')+labels.map(p=>'“'+e(p)+'”').join(' OR ')+' · '+e(scope)+'</p><p>'+e(rule.treatment?creditLabels[rule.treatment]:rule.category_name)+' · '+e(behavior)+'</p>'+(rule.replacesRuleIds?.length?'<p>Replaces the previous rule for these descriptions and account scope.</p>':'')+'<small>Existing transactions keep their current decisions. Related payment and refund links are chosen separately.</small></div>';
 }
 document.querySelector('#include-help').insertAdjacentHTML('afterend',decisionRuleFields('edit'));
+document.querySelector('#include-help').insertAdjacentHTML('beforebegin','<div id="edit-consistency-warning" class="callout" hidden><div><strong>This category is personal.</strong><p>Mark the transaction Personal to keep it outside business books, or choose a business category.</p><button type="button" class="button button-secondary button-small" data-consistency="editor-personal">Mark Personal</button></div></div>');
 
 const triage = {sourceCategory:'',category:'',classification:'',direction:'',from:'',to:'',min:'',max:'',focus:'all',sort:'date-desc',view:'rows',merchant:'',sourceGroup:null,grouping:'merchant',groups:[],bulk:null,rule:null};
 
@@ -77,13 +78,15 @@ function quickFilters(rows){
   if(triage.focus==='suggestions')rows=rows.filter(t=>state.suggestions?.[t.id]&&!state.suggestions[t.id].conflict);
   if(triage.focus==='duplicates')rows=rows.filter(t=>t.duplicateCandidate||t.duplicateOf);
   if(triage.focus==='review')rows=rows.filter(isReview);
+  if(triage.focus==='consistency')rows=rows.filter(t=>t.consistencyIssue);
   if(triage.merchant)rows=rows.filter(t=>merchantGroupKey(t)===triage.merchant);
   if(triage.sourceGroup!==null)rows=rows.filter(t=>(t.sourceCategory||'')===triage.sourceGroup);
   return sortTransactionRows(rows,triage.sort);
 }
 function quickWorkbench(){
   const rows=quickBase(), counts={all:rows.length,uncategorized:rows.filter(t=>/uncategorized/i.test(t.category)).length,unassigned:rows.filter(t=>t.classification==='unknown').length,suggestions:rows.filter(t=>state.suggestions?.[t.id]&&!state.suggestions[t.id].conflict).length,duplicates:rows.filter(t=>t.duplicateCandidate||t.duplicateOf).length,review:rows.filter(isReview).length};
-  const choices=[['all','All'],['uncategorized','Uncategorized'],['unassigned','Unassigned'],['suggestions','Rule suggestions'],['duplicates','Duplicates']];
+  counts.consistency=rows.filter(t=>t.consistencyIssue).length;
+  const choices=[['all','All'],['uncategorized','Uncategorized'],['unassigned','Unassigned'],['suggestions','Rule suggestions'],['duplicates','Duplicates'],['consistency','Check classification']];
   if(state.page!=='review')choices.push(['review','Needs review']);
   const active=['sourceCategory','category','classification','direction','from','to','min','max'].some(k=>triage[k]!=='');
   const categories=[...new Set(rows.map(t=>t.category).filter(Boolean))].sort();
@@ -126,6 +129,21 @@ document.body.insertAdjacentHTML('beforeend',`
 <dialog id="rule-editor-dialog" class="modal quick-modal"><form id="rule-editor-form"><div class="modal-top"><span class="eyebrow">MERCHANT RULE</span><button type="button" class="icon-button" data-close="rule-editor-dialog" aria-label="Close rule editor">×</button></div><h2>Recognize a repeat merchant.</h2><label class="field">Merchant description contains<input id="rule-pattern" required minlength="2" maxlength="120" placeholder="e.g. SHELL OIL"></label><label class="field">Source account scope<select id="rule-account" required></select></label><div class="field-grid"><label class="field">Business books<select id="rule-business" required></select></label><label class="field">Suggested category<select id="rule-category" required></select></label></div><div id="rule-preview" class="quick-preview" hidden></div><p class="field-hint">Matching ignores case and punctuation and uses whole words. Reviewed transactions, transfers and confirmed duplicates are not changed. Conflicting rules need your review.</p><p class="form-error" role="alert" hidden></p><div class="modal-footer"><button type="button" class="button button-secondary" data-close="rule-editor-dialog">Cancel</button><button class="button button-primary" type="submit" id="rule-submit">Preview matches</button></div></form></dialog>
 `);
 
+document.querySelector('#bulk-custom-field').insertAdjacentHTML('afterend','<div id="bulk-consistency-warning" class="callout" hidden><div><strong>This category is personal.</strong><p>Move the checked transactions to Personal to keep them outside business books, or choose a business category.</p><button type="button" class="button button-secondary button-small" data-consistency="bulk-personal">Move checked rows to Personal…</button></div></div>');
+
+function bulkPersonalCategory(){return triage.bulk?.mode==='categorize'&&isPersonalCategory($('#bulk-category').value==='__custom__'?$('#bulk-custom-category').value:$('#bulk-category').value);}
+function syncBulkConsistency(){
+  if(!triage.bulk||triage.bulk.busy)return;
+  const personal=bulkPersonalCategory(),reviewed=$('#bulk-reviewed').checked;
+  $('#bulk-consistency-warning').hidden=!personal;
+  $('#bulk-business').disabled=personal||triage.bulk.mode==='suggestions';
+  if(personal)$('#bulk-business').required=false;
+  $('#bulk-include').disabled=personal||!reviewed;
+  if(personal)$('#bulk-include').checked=false;
+  syncDecisionRule('bulk',reviewed,$('#bulk-include').checked,!personal&&triage.bulk.mode==='categorize');
+  if(personal)$('#categorize-submit').disabled=true;
+  $('[data-consistency="bulk-personal"]').disabled=!!triage.bulk.busy||!triage.bulk.ids.length;
+}
 function bulkPayload(){
   const b=triage.bulk;
   if(b.mode==='suggestions')return {ids:b.ids,mode:'suggestions'};
@@ -163,6 +181,7 @@ function openCategorize(ids=[...state.selected],mode='categorize',scope=null){
   const categories=[...new Set(rows.map(t=>t.category))];
   bulkCategoryOptions(categories.length===1?categories[0]:'');
   if(scope?.sourceCategory){const match=[...$('#bulk-category').options].find(o=>o.value.toLowerCase()===scope.sourceCategory.toLowerCase());$('#bulk-category').value=match?match.value:'__custom__';$('#bulk-custom-category').value=scope.sourceCategory.length<=100?scope.sourceCategory:'';syncBulkCustom();if(!match&&scope.sourceCategory.length>100)$('#bulk-custom-field .field-hint').textContent='The statement label is longer than the 100-character category limit. Enter a shorter category name; the full original label remains in source evidence.';}
+  seedSuggestedCategory(scope);
   initializeDecisionRule('bulk',rows,triage.grouping==='sourceCategory'?'sourceCategory':'merchant');syncDecisionRule('bulk',false,false);
   $('#bulk-include').disabled=true;$('#categorize-submit').textContent='Preview changes for all '+rows.length;$('#categorize-submit').disabled=false;
   $('#bulk-business').disabled=mode==='suggestions';$('#bulk-category').disabled=mode==='suggestions';
@@ -240,6 +259,7 @@ document.addEventListener('keydown',event=>{
 document.querySelector('#categorize-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget,button=$('#categorize-submit'),batch=triage.bulk;
   if(!batch||!batch.ids.length||batch.busy)return;
+  if(bulkPersonalCategory()){showError(form,new Error('Move the checked transactions to Personal, or choose a business category.'));return;}
   const payload=bulkPayload();setBatchBusy('category',true);
   try{
     if(!batch.revision){

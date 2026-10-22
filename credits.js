@@ -50,7 +50,7 @@ function creditCategoryOptions(selected=''){
   const business=$('#credit-business').value;
   $('#credit-category').innerHTML=quickOptions([['','Choose an expense category'],...[...new Set(state.categories.filter(c=>(!c.business_id||c.business_id===business)&&!/uncategorized/i.test(c.name)).map(c=>c.name))].sort().map(n=>[n,n])],selected);
 }
-function openCreditDecision(ids){
+function openCreditDecision(ids,context=null){
   if(!requireConnection())return;
   const rows=[...new Set(ids)].map(id=>state.transactions.find(t=>t.id===id)).filter(Boolean);
   if(!rows.length||rows.some(t=>t.direction!=='credit')){toast('Select money-in credits separately from charges.');return;}
@@ -58,12 +58,13 @@ function openCreditDecision(ids){
   creditView.bulk={ids:rows.map(t=>t.id),revision:null,candidates:[],linkRequest:0};
   initializeBatchSelection(creditView.bulk,rows.map(t=>t.id));
   const form=$('#credit-form');form.reset();$('#credit-preview').hidden=true;$('#credit-preview').innerHTML='';$('#credit-submit').textContent='Preview credit decision';
+  showSuggestedCreditContext(context);
   $('#credit-title').textContent='One decision for '+rows.length+' credit'+(rows.length===1?'':'s')+'.';
   $('#credit-description').textContent=money(rows.reduce((n,t)=>n+t.amountCents,0))+' in money-in activity. Compare the selected rows, preview the reporting effect, then apply.';
   $('#credit-scope-summary').textContent='See all '+rows.length+' selected credits';
 
   const decisions=[...new Set(rows.map(t=>t.creditTreatment||''))],suggestions=rows.map(creditSuggestion),sharedSuggestion=suggestions[0]&&!suggestions[0].conflict&&suggestions.every(s=>s&&!s.conflict&&s.treatment===suggestions[0].treatment&&s.businessId===suggestions[0].businessId&&s.category===suggestions[0].category)?suggestions[0]:null;
-  const treatment=decisions.length===1&&decisions[0]?decisions[0]:sharedSuggestion?.treatment||'__choose__';
+  const treatment=decisions.length===1&&decisions[0]?decisions[0]:sharedSuggestion?.treatment||context?.treatment||'__choose__';
   $('#credit-treatment').value=treatment;
   const business=sharedSuggestion?.businessId||(rows.every(t=>t.businessId===rows[0].businessId)?rows[0].businessId:'')||(!['all','personal'].includes(state.workspace)?state.workspace:'');
   $('#credit-business').innerHTML='<option value="">Choose a business</option>'+businessOptions(business);

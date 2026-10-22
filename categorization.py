@@ -7,6 +7,7 @@ import re
 import unicodedata
 import uuid
 import automation
+import consistency
 from decimal import Decimal
 
 FIELDS = ('category_id','category_name','classification','business_id','status','include_in_totals','excluded')
@@ -66,6 +67,8 @@ def rule_values(db, body):
         raise ValueError('Enter a merchant phrase between 2 and 120 characters.')
     if not isinstance(category,str) or not category.strip() or 'uncategorized' in category.lower():
         raise ValueError('Choose an expense category for this rule.')
+    if consistency.is_personal_category(category):
+        raise ValueError(consistency.RULE_MESSAGE)
     if not db.execute('SELECT id FROM businesses WHERE active=1 AND id=?',(business,)).fetchone():
         raise ValueError('Choose a business for this rule.')
     if account and not db.execute('SELECT id FROM accounts WHERE active=1 AND id=?',(account,)).fetchone():
@@ -144,6 +147,7 @@ def plan(db, body, validate):
             if not cat: creates.add((business,name))
             new.update(category_name=cat['name'] if cat else name,category_id=cat['id'] if cat else None)
             candidate = dict(row) | new
+            consistency.validate_transaction(candidate)
             if reviewed:
                 # The category's explicit creation is checked separately in the
                 # preview and its actual membership is checked again at commit.

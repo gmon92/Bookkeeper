@@ -28,6 +28,8 @@ import credits
 import workspace_store
 import source_archive
 import automation
+import consistency
+import review_batches
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local-bookkeeper")) / "LocalBookkeeper"
@@ -466,6 +468,7 @@ def transaction_json(row: sqlite3.Row) -> dict:
         "sourceSheet": raw.get('sheet'),
         "sourceCategory": row['original_source_category'] if 'original_source_category' in row.keys() and row['original_source_category'] is not None else source_archive.category(raw),
         "notes": row["notes"], "fingerprint": row["source_fingerprint"],
+        "consistencyIssue": consistency.transaction_issue(row),
     }
 
 
@@ -544,6 +547,8 @@ class Handler(SimpleHTTPRequestHandler):
             with connect() as db: return self.send_json(200,credits.suggestions(db))
         if path == '/api/automation':
             with connect() as db: return self.send_json(200,automation.overview(db))
+        if path == '/api/review/batches':
+            with connect() as db: return self.send_json(200,review_batches.overview(db))
         if path == '/api/credits/rules':
             with connect() as db: return self.send_json(200,credits.rules(db))
         if path.startswith('/api/credits/') and path.endswith('/candidates'):
@@ -599,7 +604,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/export.csv":
             return self.export_csv()
         if path in {'/','/index.html'}:return self.serve_interface()
-        if path in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/automation.css','/profile_ui.js'}:
+        if path in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/automation.css','/profile_ui.js'}:
             return super().do_GET()
         return self.send_error(404)
 
@@ -621,7 +626,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_HEAD(self):
         # SimpleHTTPRequestHandler otherwise allows HEAD to bypass GET's allowlist.
         if self.local_request() and unquote(urlparse(self.path).path) in {'/','/index.html'}:return self.serve_interface(head=True)
-        if self.local_request() and unquote(urlparse(self.path).path) in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/automation.css','/profile_ui.js'}:
+        if self.local_request() and unquote(urlparse(self.path).path) in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/automation.css','/profile_ui.js'}:
             return super().do_HEAD()
         return self.send_error(404)
 
@@ -677,7 +682,9 @@ class Handler(SimpleHTTPRequestHandler):
                 body = self.read_json()
                 if set(body) != {'id','active'} or type(body['active']) is not bool: raise ValueError('Choose a credit rule and whether it is active.')
                 with connect() as db:
-                    if not db.execute('SELECT id FROM credit_rules WHERE id=?',(body['id'],)).fetchone(): raise ValueError('Credit rule not found.')
+                    rule = db.execute('SELECT * FROM credit_rules WHERE id=?',(body['id'],)).fetchone()
+                    if not rule: raise ValueError('Credit rule not found.')
+                    if body['active']: consistency.validate_rule(rule)
                     db.execute('UPDATE credit_rules SET active=? WHERE id=?',(int(body['active']),body['id']))
                 return self.send_json(200,{'ok':True})
             if path in {'/api/automation/rules','/api/automation/rules/preview','/api/automation/preview','/api/automation/apply'}:
@@ -708,7 +715,9 @@ class Handler(SimpleHTTPRequestHandler):
                         result = categorization.preview_rule(db,body)
                     elif body.get('id') and set(body) <= {'id','active'}:
                         if type(body.get('active')) is not bool: raise ValueError('Rule activation must be true or false.')
-                        if not db.execute('SELECT id FROM merchant_rules WHERE id=?',(body['id'],)).fetchone(): raise ValueError('Rule not found.')
+                        rule = db.execute('SELECT * FROM merchant_rules WHERE id=?',(body['id'],)).fetchone()
+                        if not rule: raise ValueError('Rule not found.')
+                        if body['active']: consistency.validate_rule(rule)
                         db.execute('UPDATE merchant_rules SET active=? WHERE id=?',(int(body['active']),body['id']))
                         result = {'ok':True}
                     else:
@@ -871,7 +880,8 @@ class Handler(SimpleHTTPRequestHandler):
                 current = db.execute('SELECT * FROM transactions WHERE id=?', (item['transaction_id'],)).fetchone()
                 old, new = json.loads(item['old_state']), json.loads(item['new_state'])
                 later = db.execute('SELECT 1 FROM transaction_history WHERE transaction_id=? AND rowid>(SELECT coalesce(max(rowid),0) FROM transaction_history WHERE action_id=?) LIMIT 1', (item['transaction_id'],action['id'])).fetchone()
-                if not current or later or any(key not in current.keys() or current[key] != value for key,value in new.items()):
+                if (not current or later or any(key not in current.keys() or current[key] != value for key,value in new.items())
+                        or consistency.transaction_issue(dict(current) | old)):
                     conflicts.append(item['transaction_id'])
                     db.execute("UPDATE review_action_items SET outcome='conflict' WHERE id=?", (item['id'],))
                     continue
@@ -989,6 +999,7 @@ class Handler(SimpleHTTPRequestHandler):
         for key in ('description','merchant','notes','category_name'):
             if not isinstance(values[key],str) or len(values[key]) > 10000:
                 raise ValueError('Transaction text fields must contain at most 10,000 characters.')
+        consistency.validate_transaction(values)
         if not values['description'].strip(): raise ValueError('Description is required.')
         if not db.execute('SELECT id FROM accounts WHERE id=? AND active=1',(values['account_id'],)).fetchone():
             raise ValueError('Choose an active source account.')
