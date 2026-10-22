@@ -158,6 +158,21 @@ shown in All activity/Personal until assigned to a business.
 
 ## Fast categorization
 
+**Overview → Uncategorized spending** shows the total money out still missing a
+bookkeeping category and its transaction count. **Review uncategorized charges**
+opens those transactions using the same business and year. Uncategorized money
+in and amounts with an unknown direction are shown separately, so credits never
+cancel out spending. Personal items, transfers, excluded rows, confirmed
+duplicates, and credits already handled as payments/benefits are omitted.
+
+**Review queue** and **Transactions** show a **Still to categorize** summary for
+the current filters, including account, search, date and status filters. Choose
+**Show uncategorized** to narrow the list. Empty categories and labels containing
+Uncategorized use the same definition in the summary and filter. Categorizing
+rows updates these amounts even before approval. **Reports → Behind the report**
+shows the same category backlog for its business/year, with links to the rows;
+it does not change the included expense total or exported report calculations.
+
 **Review queue → Suggested batches** groups pending services and vehicle charges,
 sets aside general-retailer purchases for receipt review, and highlights possible
 refunds or rewards offsets. Cards show the affected count and amount, why rows
