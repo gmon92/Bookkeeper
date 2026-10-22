@@ -73,7 +73,7 @@ function quickFilters(rows){
   if(triage.to)rows=rows.filter(t=>t.date<=triage.to);
   if(triage.min!=='')rows=rows.filter(t=>t.amountCents>=Math.round(Number(triage.min)*100));
   if(triage.max!=='')rows=rows.filter(t=>t.amountCents<=Math.round(Number(triage.max)*100));
-  if(triage.focus==='uncategorized')rows=rows.filter(t=>!t.category||/uncategorized/i.test(t.category));
+  if(triage.focus==='uncategorized')rows=rows.filter(needsCategorization);
   if(triage.focus==='unassigned')rows=rows.filter(t=>t.classification==='unknown');
   if(triage.focus==='suggestions')rows=rows.filter(t=>state.suggestions?.[t.id]&&!state.suggestions[t.id].conflict);
   if(triage.focus==='duplicates')rows=rows.filter(t=>t.duplicateCandidate||t.duplicateOf);
@@ -84,7 +84,7 @@ function quickFilters(rows){
   return sortTransactionRows(rows,triage.sort);
 }
 function quickWorkbench(){
-  const rows=quickBase(), counts={all:rows.length,uncategorized:rows.filter(t=>/uncategorized/i.test(t.category)).length,unassigned:rows.filter(t=>t.classification==='unknown').length,suggestions:rows.filter(t=>state.suggestions?.[t.id]&&!state.suggestions[t.id].conflict).length,duplicates:rows.filter(t=>t.duplicateCandidate||t.duplicateOf).length,review:rows.filter(isReview).length};
+  const rows=quickBase(), counts={all:rows.length,uncategorized:rows.filter(needsCategorization).length,unassigned:rows.filter(t=>t.classification==='unknown').length,suggestions:rows.filter(t=>state.suggestions?.[t.id]&&!state.suggestions[t.id].conflict).length,duplicates:rows.filter(t=>t.duplicateCandidate||t.duplicateOf).length,review:rows.filter(isReview).length};
   counts.consistency=rows.filter(t=>t.consistencyIssue).length;
   const choices=[['all','All'],['uncategorized','Uncategorized'],['unassigned','Unassigned'],['suggestions','Rule suggestions'],['duplicates','Duplicates'],['consistency','Check classification']];
   if(state.page!=='review')choices.push(['review','Needs review']);
