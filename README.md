@@ -34,31 +34,46 @@ matching scripts/styles after an update instead of mixing cached older files.
 
 ### Reuse just rules and categories
 
-In **Rules & automation** or **Data & storage**, use **Export rules & categories**
-to download a standalone JSON file. It contains all categories (including tax
+Use **Reports → Download rules file**, or **Export rules & categories** in
+**Rules & automation** / **Data & storage**, to download a formatted JSON file
+with an embedded `_help` editing guide. It contains all categories (including tax
 groups, review flags and inactive categories), expense and credit rules, merchant
 text, original statement category conditions, account/business references, amount
 limits, automation/inclusion settings and paused status. This covers the entire
 active profile regardless of page filters. It contains no transactions, source
 documents, account digits, history or local database paths.
 
-Use **Import rules & categories** in the destination profile to select the file,
-map its businesses and source accounts, and **Preview import**. Add missing
+Edit this file outside the app in a text editor or with an AI. Keep an existing
+rule's `key` and `type` to update that rule; give each new rule a new unique key.
+You can edit merchant text, category conditions/destination, account/business
+scope, amount limits, automation, inclusion and enabled/paused status. The
+[rules file format guide](docs/rules-file-format.md) explains the fields and
+includes a complete editable example.
+
+Use **Upload edited rules file** in **Rules & automation** or **Data & storage**
+to select the file, map businesses/source accounts, and **Preview import**. Add missing
 businesses/accounts through the usual app controls first. Unmapped businesses and
 accounts are skipped; scoped rules never silently become rules for every account.
-Shared categories remain shared. Existing category settings and existing rules
-are kept; identical rules are skipped, and differing rules with the same matching
-conditions are left out with an explanation. Imported entries are additive.
+Shared categories remain shared. **Update rules with matching keys** edits
+existing rules and adds new ones. **Add only** keeps existing rules unchanged.
+Existing category definitions are kept and missing categories are added. Entries
+omitted from the file are kept: set `active` to `false` to pause a rule. The preview
+shows current/proposed settings for edits, retained entries and skipped conflicts.
 
 New rules default to **Suggest only**. Check **Keep the file’s automation and
 expense-inclusion settings** to preserve automatic categorization/trusted review
-and expense inclusion. Paused rules stay paused. Inspect the destination, scope,
-automation and skipped-item reasons, then choose **Import this preview**. Changed
-rules/categories or changed mappings require another preview. Importing never
-re-categorizes transactions; use **Run rule check** separately when desired.
+and expense inclusion from the file. Without that checkbox, existing rules keep
+their current automation/inclusion settings; enabled/paused status follows the
+file. Inspect the destination, scope, automation and skipped-item reasons, then
+choose **Apply to whole profile**. Changed rules/categories or changed mappings
+require another preview. Page business/year filters do not limit this import;
+each rule retains its own account/business conditions. An optional checkbox opens
+a separate rule check across all businesses/years after import, where you can
+preview/apply changes to eligible unreviewed transactions. Reviewed rows remain.
 Version 1 JSON files support up to 5 MB and 5,000 entries per collection. These
-additive imports do not have a batch Undo; newly imported rules can be paused in
-Rules & automation. The preview is the place to review the import before saving.
+configuration imports do not have a batch Undo; rules can be edited or paused in
+Rules & automation, or a previous rules file can be uploaded to restore matching
+rule settings. Review the import preview before saving.
 
 ### Resume the full profile
 
