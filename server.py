@@ -549,7 +549,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == '/api/automation':
             with connect() as db: return self.send_json(200,automation.overview(db))
         if path == '/api/rule-library/export':
-            with connect() as db: data = rule_library.encoded(rule_library.export(db, utc_now()))
+            with connect() as db: data = rule_library.encoded(rule_library.export(db, utc_now()), pretty=True)
             return self.download(data, 'bookkeeper-rules-and-categories-' + dt.date.today().isoformat() + '.json', 'application/json')
         if path == '/api/review/batches':
             with connect() as db: return self.send_json(200,review_batches.overview(db))

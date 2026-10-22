@@ -1,4 +1,4 @@
-"""Portable rules/categories with explicit scope mapping and previewed additive imports."""
+"""Portable rules/categories with scope mapping and previewed additions/edits."""
 import hashlib
 import json
 import uuid
@@ -11,12 +11,26 @@ MAX_BYTES = 5 * 1024 * 1024
 MAX_ITEMS = 5000
 
 
-def encoded(value):
-    return json.dumps(value, sort_keys=True, ensure_ascii=False).encode('utf-8')
+def encoded(value, pretty=False):
+    return json.dumps(value, sort_keys=not pretty, ensure_ascii=False, indent=2 if pretty else None).encode('utf-8')
 
 
 def export(db, now):
     result = {'format': FORMAT, 'version': 1, 'exportedAt': now,
+        '_help': {
+            'editing': 'Edit this JSON in a text editor or ask an AI to edit it. Keep valid JSON; comments are not supported.',
+            'ruleKeys': 'Keep each existing rule key and type unchanged so upload can update that rule. Use a new unique key for a new rule.',
+            'newRules': 'Copy a rule object in rules, give it a new unique key such as lowes-supplies, and edit its conditions/destination. Keep the other required fields.',
+            'patterns': 'Any listed text can appear anywhere in the merchant name or description. Lowes matches Lowes123 and Lowes234. Use [] for category-only rules.',
+            'category': 'Change a rule category to an existing category name, or add a new category entry to categories. Existing category definitions are kept on import.',
+            'sourceCategories': 'Optional original statement category labels; complete normalized labels match. All other conditions must match too.',
+            'scopes': 'businessKey and accountKey reference the lists below. Names alongside rules are display labels only. accountKey: null means all source accounts.',
+            'amounts': 'minCents/maxCents are optional integer USD cents: 2500 means $25.00. null means no limit.',
+            'mode': 'suggest = suggest only; categorize = assign category, review later; review = trusted automatic review.',
+            'active': 'true enables the rule; false pauses it. Deleting an entry from this file does not delete it from the profile; set active to false to pause it.',
+            'automation': 'On upload, existing rules keep current automation/inclusion settings and new rules start as suggest unless you choose to use the file settings.',
+            'upload': 'Upload in Rules & automation or Data & storage. Choose Update rules with matching keys, review the profile-wide preview, then apply.',
+            'transactions': 'Imported rule edits affect the whole profile within each rule scope. Use the optional rule check to preview existing unreviewed transactions. Reviewed transactions are preserved.'},
         'businesses': [{'key': r['id'], 'name': r['display_name'], 'legalName': r['legal_name']}
             for r in db.execute('SELECT * FROM businesses ORDER BY id')],
         'accounts': [{'key': r['id'], 'name': r['nickname'], 'institution': r['institution']}
@@ -24,15 +38,19 @@ def export(db, now):
         'categories': [{'key': r['id'], 'businessKey': r['business_id'], 'name': r['name'],
             'taxGroup': r['tax_group'], 'requiresReview': bool(r['requires_review']), 'active': bool(r['active'])}
             for r in db.execute('SELECT * FROM categories ORDER BY id')], 'rules': []}
+    business_names = {item['key']: item['name'] for item in result['businesses']}
+    account_names = {item['key']: item['name'] for item in result['accounts']}
     for rule in automation.all_rules(db):
         c = automation.conditions(rule)
         result['rules'].append({'key': rule['id'], 'type': rule['type'],
             'patterns': c.get('patterns', [rule['pattern']]), 'sourceCategories': automation.source_categories(rule),
-            'accountKey': rule['account_id'], 'businessKey': rule['business_id'], 'category': rule['category_name'],
+            'accountKey': rule['account_id'], 'accountName': account_names.get(rule['account_id'], 'All source accounts'),
+            'businessKey': rule['business_id'], 'businessName': business_names.get(rule['business_id'], 'Outside business books'), 'category': rule['category_name'],
             'treatment': rule.get('treatment', ''), 'mode': rule['automation_mode'],
             'includeInTotals': bool(rule['include_expenses']), 'active': bool(rule['active']),
             'minCents': c.get('minCents'), 'maxCents': c.get('maxCents')})
     validate(result)
+    if len(encoded(result, pretty=True)) > MAX_BYTES: raise ValueError('The formatted rules-and-categories file exceeds 5 MB.')
     return result
 
 
@@ -104,6 +122,8 @@ def prepare(db, body, workspace_id=''):
     indexes = validate(bundle)
     preserve = body.get('preserveAutomation', False)
     if type(preserve) is not bool: raise ValueError('Choose whether to keep automation settings.')
+    update_rules = body.get('updateRules', False)
+    if type(update_rules) is not bool: raise ValueError('Choose whether to update rules with matching keys.')
     businesses = [dict(r) for r in db.execute('SELECT * FROM businesses ORDER BY id')]
     accounts = [dict(r) for r in db.execute('SELECT * FROM accounts ORDER BY id')]
     existing_categories = [dict(r) for r in db.execute('SELECT * FROM categories ORDER BY id')]
@@ -140,15 +160,18 @@ def prepare(db, body, workspace_id=''):
         items.append(item)
     known_rules = {}
     for rule in existing_rules: known_rules.setdefault(signature(rule), []).append(rule)
+    rules_by_id = {(r['type'], r['id']): r for r in existing_rules}
     used_ids = {(r['type'], r['id']) for r in existing_rules}
-    seed = hashlib.sha256(encoded({'library': bundle, **maps, 'preserveAutomation': preserve})).hexdigest()
     for source in bundle['rules']:
+        existing = rules_by_id.get((source['type'], source['key']))
         business = business_map.get(source['businessKey']) if source.get('businessKey') else None
         account = account_map.get(source['accountKey']) if source.get('accountKey') else None
         label = ' OR '.join(source['patterns'] or source['sourceCategories'])
         item = {'kind': 'rule', 'label': label, 'status': 'add', 'reason': '', 'businessId': business,
-            'accountId': account, 'mode': source['mode'] if preserve else 'suggest', 'active': source['active'],
+            'accountId': account, 'mode': source['mode'] if preserve else existing['automation_mode'] if existing else 'suggest', 'active': source['active'],
             'category': source['category'], 'treatment': source.get('treatment', ''),
+            'patterns': source['patterns'], 'sourceCategories': source['sourceCategories'],
+            'minCents': source.get('minCents'), 'maxCents': source.get('maxCents'),
             'sourceBusiness': indexes['businesses'].get(source.get('businessKey'), {}).get('name'),
             'sourceAccount': indexes['accounts'].get(source.get('accountKey'), {}).get('name')}
         try:
@@ -159,34 +182,59 @@ def prepare(db, body, workspace_id=''):
                 category = canonical_categories.get((source.get('businessKey'), category_name.casefold())) or category_lookup.get((business, category_name.casefold())) or category_lookup.get((None, category_name.casefold()))
                 if not category or not category['active']: raise ValueError('Rule category is missing or inactive in the destination.')
                 category_name = category['name']
-            payload = {'id': str(uuid.uuid5(uuid.NAMESPACE_URL, 'local-bookkeeper-library:' + seed + ':' + source['type'] + ':' + source['key'])),
+            include = source['includeInTotals'] if preserve else bool(existing and existing['include_expenses'])
+            if not preserve and source['type'] == 'credit' and (source.get('treatment') != 'refund' or not business): include = False
+            payload = {'id': source['key'],
                 'type': source['type'], 'patterns': source['patterns'], 'sourceCategories': source['sourceCategories'],
                 'accountId': account, 'businessId': business, 'category': category_name, 'treatment': source.get('treatment', ''),
-                'mode': item['mode'], 'includeInTotals': source['includeInTotals'] if preserve else False,
+                'mode': item['mode'], 'includeInTotals': include,
                 'minAmount': str(Decimal(source['minCents']) / 100) if source.get('minCents') is not None else '',
                 'maxAmount': str(Decimal(source['maxCents']) / 100) if source.get('maxCents') is not None else ''}
             rule = automation.values(db, payload, allow_new_category=True)
             rule['active'] = int(source['active'])
             item.update(businessId=rule['business_id'], accountId=rule['account_id'],
                 category=rule['category_name'], treatment=rule.get('treatment', ''))
-            matches = known_rules.get(signature(rule), [])
-            if any(destination(other) == destination(rule) for other in matches):
+            matches = [other for other in known_rules.get(signature(rule), []) if (other['type'], other['id']) != (rule['type'], rule['id'])]
+            item['includeInTotals'] = bool(rule['include_expenses'])
+            if existing:
+                if signature(existing) == signature(rule) and destination(existing) == destination(rule):
+                    item.update(status='keep', reason='Rule already matches the file and selected automation settings.')
+                elif not update_rules:
+                    item.update(status='skip', reason='Existing rule kept. Choose Update rules with matching keys to apply this edit.')
+                elif rule['active'] and any(other['active'] for other in matches):
+                    item.update(status='skip', reason='Another enabled rule already has these matching conditions. Review the overlap before updating.')
+                else:
+                    before = automation.conditions(existing)
+                    item.update(status='update', reason='Update this existing rule throughout the active profile.', previous={
+                        'patterns': before.get('patterns', [existing['pattern']]), 'sourceCategories': automation.source_categories(existing),
+                        'minCents': before.get('minCents'), 'maxCents': before.get('maxCents'),
+                        'businessName': next((r['display_name'] for r in businesses if r['id'] == existing['business_id']), 'Outside business books'),
+                        'accountName': next((r['nickname'] for r in accounts if r['id'] == existing['account_id']), 'All source accounts'),
+                        'category': existing['category_name'], 'treatment': existing.get('treatment', ''),
+                        'mode': existing['automation_mode'], 'active': bool(existing['active']), 'includeInTotals': bool(existing['include_expenses'])})
+                    rule['_update'] = True
+                    rules.append(rule)
+                    previous_signature = signature(existing)
+                    known_rules[previous_signature] = [other for other in known_rules[previous_signature] if (other['type'], other['id']) != (rule['type'], rule['id'])]
+                    known_rules.setdefault(signature(rule), []).append(rule)
+            elif any(key == source['key'] for _, key in used_ids):
+                item.update(status='skip', reason='This key belongs to another rule type. Keep the existing type, or use a new key for a new rule.')
+            elif any(destination(other) == destination(rule) for other in matches):
                 item.update(status='keep', reason='Identical rule already present.')
-            elif matches or (rule['type'], rule['id']) in used_ids:
+            elif rule['active'] and any(other['active'] for other in matches):
                 item.update(status='skip', reason='Existing rule with these conditions kept. Review differences in Rules & automation.')
             else:
                 rules.append(rule)
                 known_rules.setdefault(signature(rule), []).append(rule)
                 used_ids.add((rule['type'], rule['id']))
-                item['includeInTotals'] = bool(rule['include_expenses'])
         except ValueError as exc:
             item.update(status='skip', reason=str(exc))
         items.append(item)
     counts = {kind + status.title(): sum(item['kind'] == kind and item['status'] == status for item in items)
-        for kind in ('category', 'rule') for status in ('add', 'keep', 'skip')}
+        for kind in ('category', 'rule') for status in ('add', 'update', 'keep', 'skip')}
     counts['trustedRules'] = sum(r['active'] and r['automation_mode'] == 'review' for r in rules)
     counts['includeInTotalsRules'] = sum(r['active'] and r['include_expenses'] for r in rules)
-    snapshot = {'workspaceId': workspace_id, 'library': bundle, **maps, 'preserveAutomation': preserve, 'businesses': businesses,
+    snapshot = {'workspaceId': workspace_id, 'library': bundle, **maps, 'preserveAutomation': preserve, 'updateRules': update_rules, 'businesses': businesses,
         'accounts': accounts, 'categories': existing_categories, 'rules': existing_rules, 'items': items}
     return {'revision': hashlib.sha256(encoded(snapshot)).hexdigest(), 'counts': counts, 'items': items}, categories, rules
 
@@ -202,6 +250,11 @@ def apply(db, body, now, workspace_id=''):
         table = 'merchant_rules' if rule['type'] == 'expense' else 'credit_rules'
         fields = ['id', 'pattern', 'account_id', 'business_id', 'category_name', 'active', 'automation_mode', 'conditions_json', 'include_expenses']
         if rule['type'] == 'credit': fields.append('treatment')
-        db.execute('INSERT INTO ' + table + '(' + ','.join(fields) + ',created_at) VALUES(' + ','.join('?' for _ in fields) + ',?)',
-            [rule[field] for field in fields] + [now])
+        if rule.get('_update'):
+            fields.remove('id')
+            db.execute('UPDATE ' + table + ' SET ' + ','.join(field + '=?' for field in fields) + ' WHERE id=?',
+                [rule[field] for field in fields] + [rule['id']])
+        else:
+            db.execute('INSERT INTO ' + table + '(' + ','.join(fields) + ',created_at) VALUES(' + ','.join('?' for _ in fields) + ',?)',
+                [rule[field] for field in fields] + [now])
     return {'ok': True, 'counts': preview['counts']}
