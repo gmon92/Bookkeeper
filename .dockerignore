@@ -15,6 +15,7 @@
 !automation.py
 !consistency.py
 !review_batches.py
+!rule_library.py
 !index.html
 !app.js
 !profile_ui.js
@@ -25,6 +26,7 @@
 !credits.js
 !automation.js
 !suggested_batches.js
+!rule_library.js
 !styles.css
 !setup.css
 !categorize.css

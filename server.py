@@ -30,6 +30,7 @@ import source_archive
 import automation
 import consistency
 import review_batches
+import rule_library
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".local-bookkeeper")) / "LocalBookkeeper"
@@ -547,6 +548,9 @@ class Handler(SimpleHTTPRequestHandler):
             with connect() as db: return self.send_json(200,credits.suggestions(db))
         if path == '/api/automation':
             with connect() as db: return self.send_json(200,automation.overview(db))
+        if path == '/api/rule-library/export':
+            with connect() as db: data = rule_library.encoded(rule_library.export(db, utc_now()))
+            return self.download(data, 'bookkeeper-rules-and-categories-' + dt.date.today().isoformat() + '.json', 'application/json')
         if path == '/api/review/batches':
             with connect() as db: return self.send_json(200,review_batches.overview(db))
         if path == '/api/credits/rules':
@@ -604,7 +608,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/export.csv":
             return self.export_csv()
         if path in {'/','/index.html'}:return self.serve_interface()
-        if path in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/automation.css','/profile_ui.js'}:
+        if path in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/rule_library.js','/automation.css','/profile_ui.js'}:
             return super().do_GET()
         return self.send_error(404)
 
@@ -626,7 +630,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_HEAD(self):
         # SimpleHTTPRequestHandler otherwise allows HEAD to bypass GET's allowlist.
         if self.local_request() and unquote(urlparse(self.path).path) in {'/','/index.html'}:return self.serve_interface(head=True)
-        if self.local_request() and unquote(urlparse(self.path).path) in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/automation.css','/profile_ui.js'}:
+        if self.local_request() and unquote(urlparse(self.path).path) in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/rule_library.js','/automation.css','/profile_ui.js'}:
             return super().do_HEAD()
         return self.send_error(404)
 
@@ -657,6 +661,15 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(409,{'error':'Choose or create your books folder to begin.'})
             if self.headers.get('X-Bookkeeper-Workspace') != WORKSPACE_ID:
                 return self.send_json(409,{'error':'The active database changed or this page is out of date. Refresh before saving changes.'})
+            if path in {'/api/rule-library/inspect', '/api/rule-library/preview', '/api/rule-library/apply'}:
+                body = self.read_json()
+                if path.endswith('/inspect'):
+                    rule_library.validate(body.get('library'))
+                    return self.send_json(200, {'ok': True})
+                with connect() as db:
+                    db.execute('BEGIN IMMEDIATE' if path.endswith('/apply') else 'BEGIN')
+                    result = rule_library.apply(db, body, utc_now(), WORKSPACE_ID) if path.endswith('/apply') else rule_library.prepare(db, body, WORKSPACE_ID)[0]
+                return self.send_json(200, result)
             if path == '/api/profile/settings':
                 with connect() as db:settings=workspace_store.save_profile_settings(db,self.read_json())
                 return self.send_json(200,{'settings':settings})
