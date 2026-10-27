@@ -62,7 +62,7 @@ def suggestions(db):
 def rule_values(db, body):
     pattern = body.get('pattern','')
     category = body.get('category','')
-    account, business = body.get('accountId') or None, body.get('businessId')
+    account, business = automation.account_scope(db, body), body.get('businessId')
     if not isinstance(pattern,str) or not 2 <= len(merchant_text(pattern)) or len(pattern.strip()) > 120:
         raise ValueError('Enter a merchant phrase between 2 and 120 characters.')
     if not isinstance(category,str) or not category.strip() or 'uncategorized' in category.lower():

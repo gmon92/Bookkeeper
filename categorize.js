@@ -18,7 +18,7 @@ function initializeDecisionRule(prefix,rows,basis='merchant'){
   $('#'+prefix+'-remember-rule').checked=false;$('#'+prefix+'-rule-mode').value='apply';
   $('#'+prefix+'-rule-basis').value=basis;$('#'+prefix+'-rule-source-categories').value=[...new Set(rows.map(t=>t.sourceCategory).filter(Boolean))].join('\n');
   const accounts=[...new Set(rows.map(t=>t.accountId))];
-  $('#'+prefix+'-rule-account').innerHTML=quickOptions([...accounts.map(id=>[id,'This account: '+accountName(state.accounts.find(a=>a.id===id))]),['*','All accounts in this profile']],accounts.length===1?accounts[0]:'*');
+  $('#'+prefix+'-rule-account').innerHTML=quickOptions([['','Choose rule scope'],...accounts.map(id=>[id,'Account only: '+accountName(state.accounts.find(a=>a.id===id))]),['*','Universal · all current and future accounts']],accounts.length===1?accounts[0]:'');
   try{$('#'+prefix+'-rule-pattern').value=decisionRuleGroups(rows).map(g=>g.pattern).join('\n');}catch(error){$('#'+prefix+'-rule-pattern').value='';}
 }
 function syncDecisionRule(prefix,reviewed,include,available=true){
@@ -35,11 +35,12 @@ function syncDecisionRule(prefix,reviewed,include,available=true){
 function decisionRulePayload(prefix,reviewed){
   if(!$('#'+prefix+'-remember-rule').checked)return {};
   const account=$('#'+prefix+'-rule-account').value;
+  if(!account)throw new Error('Choose an account or Universal for this rule.');
   return {rememberRule:true,ruleMatch:$('#'+prefix+'-rule-basis').value,ruleSourceCategories:$('#'+prefix+'-rule-source-categories').value.split('\n').map(p=>p.trim()).filter(Boolean),rulePatterns:$('#'+prefix+'-rule-pattern').value.split('\n').map(p=>p.trim()).filter(Boolean),ruleAccountId:account==='*'?null:account,ruleAllAccounts:account==='*',ruleMode:$('#'+prefix+'-rule-mode').value==='suggest'?'suggest':reviewed?'review':'categorize'};
 }
 function decisionRulePreview(rule){
   if(!rule)return '';
-  const scope=rule.account_id?accountName(state.accounts.find(a=>a.id===rule.account_id)):'All accounts in this profile';
+  const scope=rule.account_id?accountName(state.accounts.find(a=>a.id===rule.account_id)):'Universal · all current and future accounts';
   const behavior=rule.automation_mode==='suggest'?'Suggest for review; outside totals.':rule.automation_mode==='review'?'Apply and review automatically; '+(rule.include_expenses?'include in business expense totals.':'outside business expense totals.'):'Apply category automatically; awaiting review, outside totals.';
   const conditions=JSON.parse(rule.conditions_json),phrases=conditions.patterns,sources=conditions.sourceCategories||(conditions.sourceCategory?[conditions.sourceCategory]:[]),source=!!sources.length&&!phrases.length,labels=source?sources:phrases;
   return '<div class="decision-rule-preview"><strong>Rule for future imports · '+labels.length+(source?' statement categor'+(labels.length===1?'y':'ies'):' merchant phrase'+(labels.length===1?'':'s'))+'</strong><p>'+(source?'Original statement category equals any of: ':'Description contains any of: ')+labels.map(p=>'“'+e(p)+'”').join(' OR ')+' · '+e(scope)+'</p><p>'+e(rule.treatment?creditLabels[rule.treatment]:rule.category_name)+' · '+e(behavior)+'</p>'+(rule.replacesRuleIds?.length?'<p>Replaces the previous rule for these descriptions and account scope.</p>':'')+'<small>Existing transactions keep their current decisions. Related payment and refund links are chosen separately.</small></div>';

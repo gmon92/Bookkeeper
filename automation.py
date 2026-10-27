@@ -159,7 +159,7 @@ def editable_rules_comments():
             'patterns':'List of merchant/description phrases, for example ["SHELL OIL", "EXXON"]. Maximum 200 phrases, each 2-120 characters after normalization. Use [] for a source-category-only rule.',
             'sourceCategories':'List of original statement labels, for example ["Travel", "Transportation"]. Maximum 200 nonblank labels of up to 200 characters. Use [] for a merchant-only rule.',
             'sourceCategory':'Optional older spelling for a single source label. Prefer sourceCategories; the list takes precedence when supplied.',
-            'accountId':'A source account ID from reference.accounts. null means all source accounts in this profile, including future accounts. A specific ID must identify an active account.',
+            'accountId':'Required. A source account ID from reference.accounts limits this rule to that account. Explicit null means Universal: all current and future source accounts in this profile. Omitting the field or using an empty string is rejected.',
             'businessId':'A business ID from reference.businesses. Required for expense rules and business refunds. null puts a credit decision outside business books. Non-refund credit treatments ignore this field.',
             'category':'Destination expense category name, not a category ID or the original statement label. Choose an existing active category for businessId, or a shared category. Required for expenses/business refunds; use "" for other credits. Personal / non-business on an expense rule assigns personal classification and exclusion, with no business assignment. Uncategorized/review is not a valid rule destination.',
             'treatment':{
@@ -315,6 +315,18 @@ def cents(value):
     except (InvalidOperation, ValueError): raise ValueError('Use nonnegative amounts with at most two decimal places.')
 
 
+def account_scope(db, body):
+    """An omitted or blank account must never silently become a universal rule."""
+    if 'accountId' not in body:
+        raise ValueError('Choose a source account or explicitly choose Universal (accountId: null).')
+    account = body['accountId']
+    if account is not None and (not isinstance(account, str) or not account.strip()):
+        raise ValueError('Choose a source account or explicitly choose Universal (accountId: null).')
+    if account is not None and not db.execute('SELECT id FROM accounts WHERE active=1 AND id=?',(account,)).fetchone():
+        raise ValueError('Choose an active source account.')
+    return account
+
+
 def values(db, body, allow_new_category=False):
     kind = body.get('type', 'expense')
     if kind not in ('expense', 'credit'): raise ValueError('Choose an expense or credit rule.')
@@ -334,8 +346,7 @@ def values(db, body, allow_new_category=False):
     if not patterns and not sources: raise ValueError('Enter a merchant phrase or an original statement category.')
     low, high = cents(body.get('minAmount')), cents(body.get('maxAmount'))
     if low is not None and high is not None and low>high: raise ValueError('Minimum amount must not exceed maximum.')
-    account = body.get('accountId') or None
-    if account and not db.execute('SELECT id FROM accounts WHERE active=1 AND id=?',(account,)).fetchone(): raise ValueError('Choose an active source account.')
+    account = account_scope(db, body)
     treatment = body.get('treatment', '') if kind=='credit' else ''
     if kind=='credit' and treatment not in ('payment','refund','statement_credit','excluded_credit'): raise ValueError('Choose a credit decision.')
     business = body.get('businessId') or None
@@ -367,6 +378,8 @@ def decision_rule(db, body, rows, *, kind, business=None, category='', treatment
         if key in body and type(body[key]) is not bool: raise ValueError('Rule options must be true or false.')
     if body.get('rememberRule') is not True: return None
     account = body.get('ruleAccountId') or None
+    if account and body.get('ruleAllAccounts') is True:
+        raise ValueError('Choose either one source account or Universal, not both.')
     if not account and body.get('ruleAllAccounts') is not True:
         raise ValueError('Choose the source account or explicitly choose all accounts for this rule.')
     mode = body.get('ruleMode', 'suggest')

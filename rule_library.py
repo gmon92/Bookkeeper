@@ -72,6 +72,8 @@ def validate(bundle):
         string(category.get('taxGroup', ''), 'Tax group', 200, blank=True)
         if type(category.get('requiresReview')) is not bool: raise ValueError('Category requiresReview must be true or false.')
     for rule in bundle['rules']:
+        if 'accountKey' not in rule:
+            raise ValueError('Each rule must specify accountKey: an account key or null for Universal.')
         if rule.get('type') not in ('expense', 'credit'): raise ValueError('Choose an expense or credit rule type.')
         if rule.get('mode') not in automation.MODES: raise ValueError('Invalid rule automation level.')
         if type(rule.get('includeInTotals')) is not bool: raise ValueError('Rule includeInTotals must be true or false.')

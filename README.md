@@ -206,8 +206,10 @@ the database location. Use **Export JSON** for a separate download of current ru
 - `reference` lists your active business IDs, account IDs and category names.
   Copy those values into the rules; editing `reference` does not create accounts,
   businesses or categories. Create those in the app first.
-- `accountId: null` explicitly covers all source accounts. A specific account ID
-  limits the rule to that account. Expense rules need `businessId` and `category`.
+- Every rule must specify `accountId`. Explicit `null` means **Universal** and
+  covers all current and future accounts in this profile. A specific account ID
+  limits the rule to that account. Missing or blank scope is rejected, including
+  when updating an existing rule. Expense rules need `businessId` and `category`.
 - Unchanged rules and repeated identical additions are skipped. Entries omitted
   from the file remain saved. Set `active: false` to pause an exported rule.
 - The entire file is validated before saving. An invalid entry reports its rule
@@ -439,7 +441,11 @@ It can create a new category rule or add labels to an existing category rule.
 Choose **Money out** for expense categorization or **Money in** for credit
 handling. A mixed group has separate rules for its charges and credits. In the
 builder, choose business/category or credit treatment, source account or all
-accounts, and an automation level. Leave merchant descriptions blank to match
+accounts, and an automation level. A blank new rule requires you to choose its
+scope; rules created from one account default to that account. Selections across
+accounts require an explicit choice, and a previous rule's scope is never reused
+for a new rule. Choose **Universal** to cover every current and future account in
+this profile. Leave merchant descriptions blank to match
 new merchants carrying those original labels. Up to 200 statement categories
 can share a rule; any listed label matches, ignoring case and punctuation.
 Preview checks that all chosen rows fit the conditions before saving.

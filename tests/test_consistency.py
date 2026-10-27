@@ -115,11 +115,11 @@ class PersonalConsistencyTests(unittest.TestCase):
             for kind in ('expense', 'credit'):
                 with self.subTest(mode=mode, kind=kind):
                     status, body = self.request('/api/automation/rules', {'type': kind, 'patterns': ['PLUS MEMBERSHIP'],
-                        'businessId': self.fixture.business, 'category': 'Personal / non-business',
+                        'accountId':None,'businessId': self.fixture.business, 'category': 'Personal / non-business',
                         'mode': mode, 'treatment': 'refund','includeInTotals':kind=='expense'})
                     self.assertEqual(status, 400)
                     self.assertIn('personal', body['error'].lower())
-        status, _ = self.request('/api/rules', {'pattern': 'PLUS MEMBERSHIP', 'businessId': self.fixture.business,
+        status, _ = self.request('/api/rules', {'pattern': 'PLUS MEMBERSHIP', 'accountId':None,'businessId': self.fixture.business,
                                               'category': 'Personal / non-business'})
         self.assertEqual(status, 400)
         self.assertEqual(self.snapshot(), before)

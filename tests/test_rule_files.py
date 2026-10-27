@@ -7,6 +7,7 @@ import unittest
 
 import automation
 import categorization
+import rule_library
 import server
 import test_credits
 
@@ -174,7 +175,7 @@ class RuleFileTests(unittest.TestCase):
         rules=[self.expense(patterns=[],sourceCategories=['Travel','Transport'],minAmount='10.01',maxAmount='30.11',active=False),
             {'type':'credit','patterns':['NEW REFUND'],'accountId':None,'treatment':'refund',
                 'businessId':self.fixture.business,'category':'Meals','mode':'review','includeInTotals':True},
-            {'type':'credit','sourceCategories':['Benefits'],'treatment':'excluded_credit','mode':'suggest'}]
+            {'type':'credit','sourceCategories':['Benefits'],'accountId':None,'treatment':'excluded_credit','mode':'suggest'}]
         status,result=self.import_file(self.payload(*rules))
         self.assertEqual((status,result['imported']),(200,3))
         exported=self.export_file()
@@ -212,6 +213,30 @@ class RuleFileTests(unittest.TestCase):
                 self.assertEqual(status,400)
                 self.assertTrue(result['error'])
                 self.assertEqual(self.saved(),before)
+
+    def test_omitting_account_scope_cannot_widen_a_json_rule(self):
+        self.import_file(self.payload(self.expense()))
+        saved=self.export_file()['rules'][0]
+        before=self.saved()
+        for has_id in (True,False):
+            rule=copy.deepcopy(saved)
+            rule.pop('accountId')
+            if not has_id: rule.pop('id')
+            status,result=self.import_file(self.payload(self.expense(patterns=['ANOTHER SUPPLIER']),rule))
+            self.assertEqual(status,400)
+            self.assertIn('Rule 2:',result['error'])
+            self.assertIn('Universal',result['error'])
+            self.assertEqual(self.saved(),before)
+
+    def test_library_rule_scope_must_be_explicit_too(self):
+        self.import_file(self.payload(self.expense()))
+        with server.connect() as db:
+            bundle=rule_library.export(db,server.utc_now())
+        bundle['rules'][0].pop('accountKey')
+        with self.assertRaisesRegex(ValueError,'accountKey'):
+            rule_library.validate(bundle)
+        bundle['rules'][0]['accountKey']=None
+        rule_library.validate(bundle)
 
     def test_legacy_rules_export_and_deduplicate_by_meaning(self):
         with server.connect() as db:
@@ -297,7 +322,7 @@ class RuleFileTests(unittest.TestCase):
         self.assertFalse(unchanged['externalEdits'])
         with server.connect() as db:
             automation.save(db,{'type':'credit','patterns':['ANOTHER BENEFIT'],
-                'treatment':'statement_credit','mode':'suggest'},server.utc_now())
+                'accountId':None,'treatment':'statement_credit','mode':'suggest'},server.utc_now())
         status,result=self.handler.post_request()
         self.assertEqual((status,result['ruleCount']),(200,2))
         self.assertTrue(result['exported'])

@@ -52,6 +52,36 @@ class DecisionRuleTests(unittest.TestCase):
         row = self.import_row('new-card','PLUS MEMBERSHIP')
         self.assertEqual((row['category_name'],row['status'],row['include_in_totals']),('Meals','suggested',0))
 
+    def test_missing_or_ambiguous_decision_scope_saves_nothing(self):
+        for scope in ({'ruleAccountId':None}, {'ruleAllAccounts':True}):
+            with self.subTest(scope=scope), self.assertRaisesRegex(ValueError,'source account|Universal'):
+                self.categorize(**scope)
+        with server.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM merchant_rules').fetchone()[0],0)
+
+    def test_rule_scope_is_required_for_preview_save_and_legacy_preview(self):
+        body={'type':'expense','patterns':['PLUS MEMBERSHIP'],'pattern':'PLUS MEMBERSHIP',
+            'businessId':self.business,'category':'Meals','mode':'categorize'}
+        with server.connect() as db:
+            for scope in ({}, {'accountId':''}, {'accountId':False}, {'accountId':[]}):
+                for action in (automation.rule_preview,automation.values,categorization.preview_rule):
+                    with self.subTest(scope=scope,action=action.__name__), self.assertRaisesRegex(ValueError,'source account|Universal'):
+                        action(db,body|scope)
+                with self.assertRaisesRegex(ValueError,'source account|Universal'):
+                    automation.save(db,body|scope,server.utc_now())
+            self.assertEqual(db.execute('SELECT count(*) FROM merchant_rules').fetchone()[0],0)
+
+    def test_account_exception_overrides_universal_rule_only_for_its_account(self):
+        with server.connect() as db:
+            body={'type':'expense','patterns':['PLUS MEMBERSHIP'],'businessId':self.business,'mode':'categorize'}
+            universal=automation.save(db,body|{'accountId':None,'category':'Meals'},server.utc_now())['id']
+            scoped=automation.save(db,body|{'accountId':'card','category':'Office supplies'},server.utc_now())['id']
+            db.execute("INSERT INTO accounts(id,nickname) VALUES('new-card','A later account')")
+            for account,expected in (('card',scoped),('bank',universal),('new-card',universal)):
+                row=dict(db.execute('SELECT * FROM transactions WHERE id=?',(self.fixture.ids['PLUS MEMBERSHIP'],)).fetchone())
+                row['account_id']=account
+                self.assertEqual(automation.choose(row,automation.all_rules(db))['rule']['id'],expected)
+
     def test_suggestion_choice_keeps_future_matches_undecided(self):
         self.categorize(ruleMode='suggest')
         row = self.import_row('card','PLUS MEMBERSHIP')
