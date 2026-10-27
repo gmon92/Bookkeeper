@@ -68,12 +68,26 @@ and automation levels, categories, businesses, accounts, confirmed import layout
 view preferences, history and original row archives. Open it directly with **Open
 profile**, or use **Restore export / backup** to copy it into new books.
 
-Reports exports an **accountant summary** with two worksheets: category totals
-and activity outside expense totals on the first, and monthly totals on the
-second. The selected business and year limit the report. Charges and refunds
-are shown separately, and pending activity stays outside the net expense total.
-The workbook contains no transaction rows, hidden profile, rules or original row
-data. Use the separate SQLite export or profile backup for complete books.
+Reports exports an **accountant summary** with three worksheets: category totals
+and activity outside expense totals on the first, monthly totals on the second,
+and **Transactions** on the third. The selected business and year limit all three
+worksheets. Transactions lists every row in that scope, including pending,
+personal, excluded, duplicate, payment and refund activity. It includes dates,
+descriptions, businesses, source accounts, categories, amounts, review status,
+totals inclusion and exclusion reasons, source references, notes and transaction
+IDs. Filter the headers or scroll with the date/description columns frozen.
+The Net expense USD column reconciles to the summary; activity outside totals
+has no contribution. Charges and refunds remain separate in the summaries.
+The workbook contains no hidden profile, rules or original raw row archives.
+Use the separate SQLite export or profile backup for complete books.
+
+Choose **Export report** to select a file type before downloading. **Excel (.xlsx)**
+contains the three worksheets described above. **CSV (.csv)** contains the same
+complete transaction table in one flat file for imports into other tools, without
+summary worksheets or formatting. **PDF (.pdf)** contains printable category and
+monthly summaries followed by all transactions with source references. Every
+format follows the selected business and year and preserves the same expense
+inclusion decisions. CSV and PDF exports cannot restore a profile.
 
 Previously exported reusable Excel ledgers remain restorable. The legacy
 `view=ledger&portable=1` API export retains that format for compatibility, with
@@ -707,10 +721,12 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
 - `POST /api/review/undo` — `actionId`
 - `POST /api/duplicates/resolve` — `transactionId`, `canonicalId`,
   `decision` (`duplicate` or `distinct`)
-- `GET /api/export.xlsx`, `/api/export.csv` — optional `businessId`, `year`.
+- `GET /api/export.xlsx`, `/api/export.csv`, `/api/export.pdf` — optional `businessId`, `year`.
   XLSX defaults to the accountant summary (`view=summary`), without profile data.
   Legacy detailed exports use `view=ledger`; explicitly add `portable=1` to embed
-  a reusable profile. Summary exports reject embedded profiles. CSV contains report rows only.
+  a reusable profile. Summary exports reject embedded profiles. CSV defaults to
+  the included expense ledger; `view=transactions` exports all transaction details
+  in the selected scope. PDF includes summaries and a complete transaction appendix.
 - `GET /api/backup`
 - `POST /api/categorization/preview` and `/api/categorization/apply` — selected
   `ids`, category/business, review/inclusion choices; apply requires the returned

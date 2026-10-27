@@ -151,15 +151,52 @@ test('cancelled exports do not start downloads; approved exports download once',
   }
 });
 
-test('accountant summaries download only the summary without a profile prompt',()=>{
+function reportExportEnvironment(){
+  const env=environment(false),shown=[],messages=[];
+  const elements={'#report-export-format':{value:'xlsx'},'#report-export-description':{},'#report-export-scope':{},'#report-export-dialog':{close(){this.closed=true;}}};
+  env.context.$=selector=>elements[selector];
+  env.context.workspaceName=()=> 'Example LLC';
+  env.context.showDialog=id=>shown.push(id);
+  env.context.toast=message=>messages.push(message);
+  vm.runInContext(app.slice(app.indexOf('let reportExport=null;'),app.indexOf('function openAccount(')),env.context);
+  return {...env,elements,shown,messages};
+}
+
+test('export button opens a format chooser before starting a download',()=>{
   const start=app.indexOf("document.addEventListener('click',event=>{");
   const end=app.indexOf("document.addEventListener('change',event=>{",start);
-  const env=environment(false);
+  const env=reportExportEnvironment();
   vm.runInContext(app.slice(start,end),env.context);
   env.listeners.click({target:{closest:selector=>selector==='[data-action]'?{dataset:{action:'export'}}:null}});
   assert.equal(env.prompts.length,0);
+  assert.deepEqual(env.shown,['report-export-dialog']);
+  assert.deepEqual(env.downloads,[]);
+  env.context.downloadReportExport();
   assert.deepEqual(env.downloads,['/api/export.xlsx?view=summary']);
   assert.ok(env.context.protectedActionDescription('/api/export.xlsx?view=ledger&portable=1'));
+});
+
+test('each report format preserves the selected business and year',()=>{
+  for(const format of ['xlsx','csv','pdf']){
+    const env=reportExportEnvironment();env.context.state.workspace='business';env.context.state.year='2025';
+    env.context.openReportExport();env.elements['#report-export-format'].value=format;
+    env.context.downloadReportExport();
+    assert.deepEqual(env.downloads,[`/api/export.${format}?view=${format==='csv'?'transactions':'summary'}&businessId=business&year=2025`]);
+    assert.equal(env.elements['#report-export-dialog'].closed,true);
+  }
+});
+
+test('changed profile or filters block a stale export selection',()=>{
+  for(const change of ['profile','year','business']){
+    const env=reportExportEnvironment();env.context.openReportExport();
+    if(change==='profile')env.context.state.health.workspaceId='different';
+    if(change==='year')env.context.state.year='2025';
+    if(change==='business')env.context.state.workspace='business';
+    env.context.downloadReportExport();assert.deepEqual(env.downloads,[]);
+    assert.match(env.messages[0],/profile or report filters changed/);
+  }
+  const env=reportExportEnvironment();
+  assert.throws(()=>env.context.reportExportTarget('exe',{workspace:'all',year:'all'}),/Choose Excel, CSV or PDF/);
 });
 
 test('personal category rows stay outside report totals despite legacy inclusion flags',()=>{

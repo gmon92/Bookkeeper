@@ -21,7 +21,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from statement_import import parse_statement
-from reports import excel_report, excel_summary, safe_text
+from reports import excel_report, excel_summary, csv_transactions, pdf_summary, safe_text
 from backup import create_backup, restore_backup, export_database
 import categorization
 import credits
@@ -615,6 +615,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.export_excel()
         if path == "/api/export.csv":
             return self.export_csv()
+        if path == '/api/export.pdf':
+            return self.export_pdf()
         if path in {'/','/index.html'}:return self.serve_interface()
         if path in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/rule_library.js','/automation.css','/profile_ui.js','/safeguards.js'}:
             return super().do_GET()
@@ -1159,6 +1161,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def export_csv(self):
         query = parse_qs(urlparse(self.path).query)
+        view=query.get('view',['ledger'])[0]
+        if view not in ('ledger','transactions'):raise ValueError('Choose a ledger or all-transactions CSV export.')
+        if view=='transactions':
+            rows,_,_=self.report_scope()
+            return self.download(csv_transactions(rows),'bookkeeper-transactions.csv','text/csv; charset=utf-8')
         business_id = query.get("businessId", [""])[0]
         year = query.get("year", [""])[0]
         if year and not re.fullmatch(r"\d{4}", year):
@@ -1201,20 +1208,7 @@ class Handler(SimpleHTTPRequestHandler):
         portable=query.get('portable',['0'])[0]
         if portable not in ('0','1'): raise ValueError('Choose whether to include reusable profile data.')
         if view=='summary' and portable=='1':raise ValueError('Accountant summaries never include a reusable profile. Use the separate database export for a full copy.')
-        if year and not re.fullmatch(r'\d{4}',year):
-            return self.send_json(400, {'error':'Choose a valid reporting year.'})
-        where, params = [], []
-        with connect() as db:
-            label = 'All businesses'
-            if business:
-                record = db.execute('SELECT display_name FROM businesses WHERE id=?',(business,)).fetchone()
-                if not record: return self.send_json(400, {'error':'Choose a valid business.'})
-                label = record[0]
-                where.append('(t.business_id=? OR (t.business_id IS NULL AND a.business_id=?))'); params.extend((business,business))
-            if year:
-                where.append('t.date>=? AND t.date<?'); params.extend((year+'-01-01',str(int(year)+1).zfill(4)+'-01-01'))
-            rows = db.execute('''SELECT t.*,a.nickname,a.last_four,d.filename,b.display_name AS business_name FROM transactions t
-                JOIN accounts a ON a.id=t.account_id LEFT JOIN documents d ON d.id=t.document_id LEFT JOIN businesses b ON b.id=t.business_id'''+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY t.date,t.id',params).fetchall()
+        rows,label,year=self.report_scope()
         try:
             if view=='summary':
                 data=excel_summary(rows,label,year)
@@ -1224,6 +1218,32 @@ class Handler(SimpleHTTPRequestHandler):
         except ImportError:
             return self.send_json(503, {'error':'Install Excel support with python -m pip install -r requirements.txt.'})
         return self.download(data,'bookkeeper-ledger-with-profile.xlsx' if portable=='1' else 'bookkeeper-report.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+    def report_scope(self):
+        query=parse_qs(urlparse(self.path).query)
+        business=query.get('businessId',[''])[0]
+        year=query.get('year',[''])[0]
+        if year and not re.fullmatch(r'\d{4}',year):raise ValueError('Choose a valid reporting year.')
+        where, params = [], []
+        with connect() as db:
+            label = 'All businesses'
+            if business:
+                record = db.execute('SELECT display_name FROM businesses WHERE id=?',(business,)).fetchone()
+                if not record:raise ValueError('Choose a valid business.')
+                label = record[0]
+                where.append('(t.business_id=? OR (t.business_id IS NULL AND a.business_id=?))'); params.extend((business,business))
+            if year:
+                where.append('t.date>=? AND t.date<?'); params.extend((year+'-01-01',str(int(year)+1).zfill(4)+'-01-01'))
+            rows = db.execute('''SELECT t.*,a.nickname,a.last_four,d.filename,b.display_name AS business_name FROM transactions t
+                JOIN accounts a ON a.id=t.account_id LEFT JOIN documents d ON d.id=t.document_id LEFT JOIN businesses b ON b.id=t.business_id'''+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY t.date,t.id',params).fetchall()
+        return rows,label,year
+
+    def export_pdf(self):
+        rows,label,year=self.report_scope()
+        try:data=pdf_summary(rows,label,year)
+        except ImportError:
+            return self.send_json(503, {'error':'Install PDF support with python -m pip install -r requirements.txt.'})
+        return self.download(data,'bookkeeper-accountant-report.pdf','application/pdf')
 
     def backup(self):
         # Serialize with imports so the database snapshot and document set agree.
