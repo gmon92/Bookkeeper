@@ -125,7 +125,7 @@ function ledgerRow(t) {
 }
 function renderLedger() {
   const isQueue = state.page === 'review', tx = scopedTransactions().filter(inYear);
-  return heading(isQueue ? 'A little review. A lot of clarity.' : 'Every transaction, accounted for.', isQueue ? 'Check the source, choose where it belongs, and decide what enters your totals.' : 'The complete record, including personal items, transfers, and exclusions.', yearSelect() + '<button class="button button-secondary" data-auto-run>Run rule check</button>' + button('Import statement', 'import', 'primary', 'plus'), isQueue ? 'PUT THE DETAILS IN PLACE' : 'YOUR EXPENSE LEDGER') +
+  return heading(isQueue ? 'A little review. A lot of clarity.' : 'Every transaction, accounted for.', isQueue ? 'Check the source, choose where it belongs, and decide what enters your totals.' : 'The complete record, including personal items, transfers, and exclusions.', yearSelect() + '<button class="button button-secondary" data-auto-run>Run rule check</button>' + button('Add transaction','add-transaction','secondary','plus') + button('Import statement', 'import', 'primary', 'plus'), isQueue ? 'PUT THE DETAILS IN PLACE' : 'YOUR EXPENSE LEDGER') +
     (state.document ? '<div class="filter-note">' + icon('file') + 'Showing rows from ' + e(state.documents.find(d => d.id === state.document)?.filename || 'a statement') + '<button class="text-button" data-action="clear-document">Clear filter</button></div>' : '') +
     '<div id="uncategorized-summary" aria-live="polite"></div>' + (isQueue?'<div id="suggested-batches"></div>':'') + quickWorkbench() + '<section class="panel table-panel"><div class="table-toolbar">' + (isQueue ? '<span class="filter-note" style="margin:0">' + icon('review') + '<span id="queue-scope-count"></span></span>' : '<div class="segmented" role="group" aria-label="Transaction status">' + [['all','All transactions',tx.length],['approved','Reviewed',tx.filter(t=>t.status==='approved').length],['excluded','Excluded',tx.filter(t=>t.excluded).length]].map(([key,label,count])=>'<button data-tab="' + key + '" class="' + (state.tab===key?'active':'') + '" aria-pressed="' + (state.tab===key) + '">' + label + '<span>' + count + '</span></button>').join('') + '</div>') +
     '<div class="toolbar-filters"><label class="search-field">' + icon('search') + '<input id="transaction-search" type="search" placeholder="Search merchant, notes… use | for OR" value="' + e(state.query) + '" aria-label="Search transactions"></label><select class="filter-select" id="account-filter" aria-label="Filter by account"><option value="">All accounts</option>' + scopedAccounts().map(a=>'<option value="' + e(a.id) + '"' + (state.account===a.id?' selected':'') + '>' + e(a.nickname) + '</option>').join('') + '</select>'+transactionSortControl(triage.sort,'ledger',triage.view==='groups')+'</div></div><div id="batch-bar" class="batch-bar" hidden></div><div id="merchant-groups" hidden></div><div class="table-wrap" id="ledger-table-wrap"><table class="ledger-table"><thead><tr><th class="select-cell"><input type="checkbox" id="select-all" aria-label="Select all visible transactions"></th><th>Transaction</th><th class="date-col">Date</th><th class="category-col">Category & books</th><th class="account-col">Source account</th><th style="text-align:right">Amount</th><th class="state-col">Review state</th><th></th></tr></thead><tbody id="ledger-body"></tbody></table></div><div class="table-caption"><span id="ledger-count"></span><span>Click any transaction to review its details</span></div></section>';
@@ -359,16 +359,40 @@ function syncEditor() {
   $('#edit-business-field').hidden=classification!=='business';
   const valid=!personalConflict&&classification==='business'&&((direction==='debit'&&['expense','fee'].includes(kind))||(direction==='credit'&&kind==='refund'));
   form.elements.includeInTotals.disabled=!valid;if(!valid)form.elements.includeInTotals.checked=false;
-  $('#include-help').textContent=personalConflict?'Mark this transaction Personal or choose a business category before including it in totals.':valid?'Inclusion is your explicit decision. Saving marks the transaction reviewed.':classification!=='business'?'Personal items and transfers remain outside business expense totals.':'Choose a transaction kind and money movement before including it in expense totals.';
+  $('#include-help').textContent=personalConflict?'Mark this transaction Personal or choose a business category before including it in totals.':valid?(form.elements.id.value?'Inclusion is your explicit decision. Saving marks the transaction reviewed.':'Leave totals off to save for review. Including an eligible expense or refund also marks it reviewed.'):classification!=='business'?(form.elements.id.value?'Personal items and transfers remain outside business expense totals.':'Saved for review, outside business expense totals.'):'Choose a transaction kind and money movement before including it in expense totals.';
   syncEditorRule();
 }
 function syncEditorRule(){
   const form=$('#transaction-form'),classification=new FormData(form).get('classification');
-  syncDecisionRule('edit',true,form.elements.includeInTotals.checked,classification==='business'&&!isPersonalCategory(form.elements.category.value)&&form.elements.direction.value==='debit'&&['expense','fee'].includes(form.elements.kind.value));
+  syncDecisionRule('edit',true,form.elements.includeInTotals.checked,!!form.elements.id.value&&classification==='business'&&!isPersonalCategory(form.elements.category.value)&&form.elements.direction.value==='debit'&&['expense','fee'].includes(form.elements.kind.value));
+}
+function openManualTransaction(){
+  if(!requireConnection())return;
+  if(!state.accounts.length){toast('Add a source account before entering a transaction.');openAccount();return;}
+  const form=$('#transaction-form');form.reset();form.elements.id.value='';
+  form.dataset.workspaceId=state.health.workspaceId;form.dataset.creationId=crypto.randomUUID();
+  $('#editor-title').textContent='Add transaction';$('#transaction-save').textContent='Add transaction';
+  const today=new Date();form.elements.date.value=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+  form.elements.description.value='';form.elements.amount.value='';form.elements.notes.value='';
+  $('#edit-account').innerHTML=accountOptions();
+  const business=!['all','personal'].includes(state.workspace)?state.workspace:state.businesses[0]?.id||'';
+  $('#edit-business').innerHTML=businessOptions(business);setCategories(business,'Uncategorized / review');
+  form.elements.direction.value='debit';form.elements.kind.value='expense';
+  $('input[name=classification][value="unknown"]',form).checked=true;
+  form.elements.includeInTotals.checked=false;$('#edit-remember-rule').checked=false;
+  $('#editor-amount').innerHTML='<strong>Manual entry</strong><span class="cell-secondary">Enter the amount below.</span>';
+  $('#editor-warnings').innerHTML='<p>Saved for review and kept outside expense totals unless you explicitly include an eligible business expense or refund.</p>';
+  if($('#editor-credit-actions'))$('#editor-credit-actions').innerHTML='';
+  $$('.source-evidence,.transaction-explanation',form).forEach(section=>section.hidden=true);
+  $('#source-evidence').innerHTML='';$('#transaction-history').textContent='';$('#transaction-explanation').textContent='';
+  syncEditor();showDialog('transaction-dialog');
 }
 function openEditor(id) {
   const t=state.transactions.find(tx=>tx.id===id);if(!t)return;
   const form=$('#transaction-form');form.reset();
+  form.dataset.workspaceId=state.health.workspaceId;delete form.dataset.creationId;
+  $('#transaction-save').innerHTML='Save reviewed transaction '+icon('check');
+  $$('.source-evidence,.transaction-explanation',form).forEach(section=>section.hidden=false);
   $('#editor-title').textContent=t.merchant||t.description;
   form.elements.id.value=t.id;form.elements.description.value=t.description;form.elements.date.value=/^\d{4}-\d{2}-\d{2}$/.test(t.date)?t.date:'';form.elements.amount.value=(t.amountCents/100).toFixed(2);
   $('#edit-account').innerHTML=accountOptions(t.accountId);
@@ -442,6 +466,7 @@ document.addEventListener('click',event=>{
   const tab=event.target.closest('[data-tab]');if(tab){state.tab=tab.dataset.tab;state.selected.clear();render();return;}
   const action=event.target.closest('[data-action]')?.dataset.action;
   if(action==='import')openStatementImportMode();
+  else if(action==='add-transaction')openManualTransaction();
   else if(action==='import-single'||action==='import-batch'){if(requireConnection()){$('#import-mode-dialog').close();$(action==='import-batch'?'#batch-file-input':'#file-input').click();}}
   else if(action==='add-account')openAccount();
   else if(action==='add-business')openBusiness();
@@ -468,7 +493,7 @@ document.addEventListener('change',event=>{
 document.addEventListener('input',event=>{if(event.target.id==='transaction-search'){state.query=event.target.value;state.selected.clear();updateLedger();}});
 $('#workspace-select').addEventListener('change',event=>{state.workspace=event.target.value;state.selected.clear();state.document='';state.account='';state.query='';saveProfilePreferences({workspace:state.workspace});render();});
 $('#report-export-form').addEventListener('submit',event=>{event.preventDefault();downloadReportExport();});
-$('#transaction-form').addEventListener('change',event=>{if(event.target.name==='businessId')setCategories(event.target.value,$('#edit-category').value);if(event.target.name==='accountId'){const all=$('#edit-rule-account').value==='*',account=state.accounts.find(a=>a.id===event.target.value);$('#edit-rule-account').innerHTML=quickOptions([[account.id,'Account only: '+accountName(account)],['*','Universal · all current and future accounts']],all?'*':account.id);}syncEditor();});
+$('#transaction-form').addEventListener('change',event=>{if(event.target.name==='businessId')setCategories(event.target.value,$('#edit-category').value);if(event.target.name==='accountId'){const all=$('#edit-rule-account').value==='*',account=state.accounts.find(a=>a.id===event.target.value);$('#edit-rule-account').innerHTML=account?quickOptions([[account.id,'Account only: '+accountName(account)],['*','Universal · all current and future accounts']],all?'*':account.id):'';}if(!event.currentTarget.elements.id.value&&event.target.name==='direction')event.currentTarget.elements.kind.value=event.target.value==='credit'?'unknown':'expense';syncEditor();});
 $('#account-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget;busy(form,true);
   try{const data=Object.fromEntries(new FormData(form));data.businessId=data.businessId||null;const saved=await post('/api/accounts',data);await loadData({quiet:true});form.reset();$('#account-dialog').close();if($('#import-dialog').open){$('#import-account').innerHTML=accountOptions(saved.id);$('#import-account').dispatchEvent(new Event('change',{bubbles:true}));if(statementBatch){$('#batch-import-account').innerHTML=accountOptions(saved.id);$('#batch-import-account').dispatchEvent(new Event('change',{bubbles:true}));}}toast('Source account added.');}catch(error){showError(form,error);}finally{busy(form,false);}
@@ -486,14 +511,19 @@ $('#import-form').addEventListener('submit',async event=>{
 $('#transaction-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget;busy(form,true);
   try{
+    if(form.dataset.workspaceId!==state.health?.workspaceId)throw new Error('The active profile changed. Reopen this transaction before saving.');
     const data=Object.fromEntries(new FormData(form)),match=data.amount.match(/^(\d+)(?:\.(\d{1,2}))?$/);
     if(!match)throw new Error('Enter an amount with no more than two decimal places.');
     const amountCents=Number(match[1])*100+Number((match[2]||'').padEnd(2,'0'));if(!Number.isSafeInteger(amountCents)||amountCents<=0)throw new Error('Enter a positive amount.');
     const includeInTotals=form.elements.includeInTotals.checked&&!form.elements.includeInTotals.disabled;
     if(data.classification==='business'&&isPersonalCategory(data.category))throw new Error('Mark this transaction Personal, or choose a business category. Personal / non-business cannot be saved in business books.');
     if(includeInTotals&&/uncategorized/i.test(data.category))throw new Error('Choose an expense category before including this transaction in totals.');
-    const saved=await post('/api/transactions/'+encodeURIComponent(data.id),{description:data.description,merchant:data.description,date:data.date,amountCents,accountId:data.accountId,businessId:data.classification==='business'?data.businessId:null,direction:data.direction,kind:data.kind,classification:data.classification,category:data.category,includeInTotals,notes:data.notes,status:'approved',...decisionRulePayload('edit',true)},'PATCH');
-    $('#transaction-dialog').close();await loadData({quiet:true});toast((includeInTotals?'Reviewed and included in expense totals.':'Transaction reviewed and saved outside totals.')+(saved.ruleId?' Future-import rule saved.':''));
+    const creating=!data.id;
+    const payload={description:data.description,merchant:data.description,date:data.date,amountCents,accountId:data.accountId,businessId:data.classification==='business'?data.businessId:null,direction:data.direction,kind:data.kind,classification:data.classification,category:data.category,includeInTotals,notes:data.notes,status:creating&&!includeInTotals?'needs_review':'approved',...(creating?{requestId:form.dataset.creationId}:decisionRulePayload('edit',true))};
+    const saved=await post(creating?'/api/transactions':'/api/transactions/'+encodeURIComponent(data.id),payload,creating?'POST':'PATCH');
+    $('#transaction-dialog').close();await loadData({quiet:true});
+    if(creating){state.workspace='all';$('#workspace-select').value='all';state.year='all';state.document='';state.account=data.accountId;state.query=data.description;state.tab='all';state.selected.clear();Object.assign(triage,{sourceCategory:'',category:'',classification:'',direction:'',from:data.date,to:data.date,min:'',max:'',focus:'all',merchant:'',sourceGroup:null,view:'rows',resultIds:null});navigate('transactions');}
+    toast((creating?(includeInTotals?'Manual transaction added and included in expense totals.':'Manual transaction added for review, outside totals.'):(includeInTotals?'Reviewed and included in expense totals.':'Transaction reviewed and saved outside totals.'))+(saved.ruleId?' Future-import rule saved.':''));
   }catch(error){showError(form,error);}finally{busy(form,false);}
 });
 $('#batch-form').addEventListener('submit',async event=>{

@@ -12,6 +12,7 @@ CATEGORY_HEADERS = ('category', 'transactioncategory', 'merchantcategory', 'expe
 
 
 def category(raw, extraction=None):
+    if raw.get('manualEntry'):return ''
     values = raw.get('values', [])
     column = (extraction or {}).get('columns', {}).get('sourceCategory')
     if column and 0 <= column['index'] < len(values):
@@ -180,6 +181,11 @@ def save_transaction(db, transaction_id, document_id, raw, row_number, now, norm
 def original(db, transaction_id):
     row = db.execute('SELECT * FROM original_transactions WHERE transaction_id=?', (transaction_id,)).fetchone()
     if row is None:
+        manual_row=db.execute('SELECT source_raw_json FROM transactions WHERE id=?',(transaction_id,)).fetchone()
+        raw=json.loads(manual_row['source_raw_json']) if manual_row else {}
+        manual=raw.get('manualEntry')
+        if manual:
+            return {'origin':'manual','sourceCategory':'','raw':raw,'normalized':manual['normalized'],'capturedAt':manual['capturedAt']}
         return None
     return {'sourceCategory': row['source_category'], 'raw': json.loads(row['raw_json']),
             'normalized': json.loads(row['normalized_json']) if row['normalized_json'] else None,

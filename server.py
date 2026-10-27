@@ -858,6 +858,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.undo_review()
             if path == '/api/duplicates/resolve':
                 return self.resolve_duplicate()
+            if path == '/api/transactions':
+                return self.create_transaction()
             if path.startswith("/api/transactions/"):
                 return self.update_transaction(unquote(path.rsplit("/", 1)[-1]))
             if path == "/api/review/batch":
@@ -1074,6 +1076,75 @@ class Handler(SimpleHTTPRequestHandler):
             db.execute('INSERT OR REPLACE INTO duplicate_decisions VALUES(?,?,?,?)', (a,b,decision,utc_now()))
         return self.send_json(200, {'ok':True})
 
+    def create_transaction(self):
+        body=self.read_json()
+        allowed={'requestId','date','description','merchant','amountCents','accountId','businessId',
+            'direction','kind','classification','category','includeInTotals','notes','status'}
+        if set(body)-allowed:raise ValueError('Manual entries contain unsupported fields.')
+        request_id=body.get('requestId')
+        try:
+            if not isinstance(request_id,str) or str(uuid.UUID(request_id))!=request_id:raise ValueError()
+        except (ValueError,AttributeError):raise ValueError('Open Add transaction again to start a new manual entry.')
+        request_hash=hashlib.sha256(json.dumps(body,sort_keys=True).encode()).hexdigest()
+        with connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            prior=db.execute("SELECT id,source_raw_json FROM transactions WHERE json_extract(source_raw_json,'$.manualEntry.requestId')=?",(request_id,)).fetchone()
+            if prior:
+                if json.loads(prior['source_raw_json'])['manualEntry']['requestHash']!=request_hash:
+                    raise ValueError('This manual entry was already saved. Refresh your transactions before editing it.')
+                return self.send_json(201,{'ok':True,'id':prior['id']})
+            direction=body.get('direction','debit');kind=body.get('kind','expense')
+            classification=body.get('classification','unknown')
+            for value,options,message in ((direction,{'debit','credit'},'Choose money in or money out.'),
+                    (kind,{'expense','fee','refund','transfer','adjustment','unknown'},'Choose a valid transaction kind.'),
+                    (classification,{'business','personal','transfer','unknown'},'Choose a valid transaction classification.'),
+                    (body.get('status','needs_review'),{'needs_review','suggested','approved'},'Choose a valid review status.')):
+                if not isinstance(value,str) or value not in options:raise ValueError(message)
+            if (kind in {'expense','fee'} and direction!='debit') or (kind=='refund' and direction!='credit'):
+                raise ValueError('Expenses and fees need money out; refunds need money in.')
+            amount=body.get('amountCents');include=body.get('includeInTotals',False)
+            if type(amount) is not int or not 0<amount<=999999999999:raise ValueError('Enter a positive amount in integer USD cents.')
+            if type(include) is not bool:raise ValueError('Totals inclusion must be true or false.')
+            account=body.get('accountId');business=body.get('businessId') if classification=='business' else None
+            if not isinstance(account,str) or not account:raise ValueError('Choose an active source account.')
+            if classification=='business' and (not isinstance(business,str) or not business):raise ValueError('Choose a business for this transaction.')
+            category=body.get('category','Uncategorized / review')
+            if not isinstance(category,str) or not category.strip() or len(category)>200:raise ValueError('Enter a category of up to 200 characters.')
+            category=category.strip()
+            cat=db.execute('SELECT id,name FROM categories WHERE active=1 AND name=? COLLATE NOCASE AND (business_id=? OR business_id IS NULL) ORDER BY business_id IS NULL LIMIT 1',(category,business)).fetchone()
+            if cat:category=cat['name']
+            values={'date':body.get('date'),'posted_date':None,'description':body.get('description',''),
+                'merchant':body.get('merchant',body.get('description','')),'notes':body.get('notes',''),
+                'amount_cents':amount,'account_id':account,'business_id':business,'direction':direction,
+                'transaction_kind':kind,'classification':classification,'category_name':category,
+                'status':body.get('status','needs_review'),'include_in_totals':int(include),'duplicate_of':None,'excluded':0,
+                'credit_treatment':'refund' if direction=='credit' and kind=='refund' and classification in {'business','personal'} else ''}
+            self.validate_transaction(db,values)
+            fingerprint=hashlib.sha256('|'.join((values['date'],'',str(amount),direction,normalize_header(values['description']))).encode()).hexdigest()
+            if include and db.execute('SELECT 1 FROM transactions WHERE account_id=? AND source_fingerprint=?',(account,fingerprint)).fetchone():
+                raise ValueError('A matching transaction already exists on this account. Save outside totals and resolve the possible duplicate first.')
+            now=utc_now();transaction_id=str(uuid.uuid4())
+            normalized={'date':values['date'],'postedDate':None,'description':values['description'],'merchant':values['merchant'],
+                'amountCents':amount,'direction':direction,'kind':kind,'category':category,'classification':classification,
+                'accountId':account,'businessId':business,'includeInTotals':include,'notes':values['notes']}
+            reason='You manually entered this transaction and chose “'+category+'”. '+('Explicitly included in business expense totals.' if include else 'Saved outside business expense totals.')
+            raw={'manualEntry':{'requestId':request_id,'requestHash':request_hash,'capturedAt':now,'normalized':normalized},
+                'headers':['Date','Description','Amount USD','Movement','Entered category','Notes'],
+                'values':[values['date'],values['description'],format(Decimal(amount)/100,'.2f'),direction,category,values['notes']],
+                'evidence':{'dateReason':'Date entered manually.','amountReason':'Positive USD amount entered manually; money movement is a separate choice.',
+                    'directionReason':'You chose '+direction+'.','kindReason':'You chose '+kind+'.','categoryReason':reason}}
+            columns=['date','posted_date','description','merchant','notes','amount_cents','account_id','business_id','direction','transaction_kind',
+                'classification','category_name','status','include_in_totals','duplicate_of','excluded','credit_treatment']
+            values.update(id=transaction_id,document_id=None,category_id=cat['id'] if cat else None,
+                raw_amount_text=format(Decimal(amount)/100,'.2f'),source_amount_cents=amount,source_fingerprint=fingerprint,
+                source_raw_json=json.dumps(raw),created_at=now,updated_at=now)
+            columns+=['id','document_id','category_id','raw_amount_text','source_amount_cents','source_fingerprint','source_raw_json','created_at','updated_at']
+            db.execute('INSERT INTO transactions('+','.join(columns)+') VALUES('+','.join('?' for _ in columns)+')',[values[key] for key in columns])
+            for field in ('date','description','amount_cents','direction','transaction_kind','account_id','business_id','classification','category_name','include_in_totals','notes','status'):
+                db.execute('INSERT INTO transaction_history(id,transaction_id,field_name,old_value,new_value,action,reason,changed_at) VALUES(?,?,?,?,?,?,?,?)',
+                    (str(uuid.uuid4()),transaction_id,field,None,json.dumps(values[field]),'manual_entry',reason,now))
+        return self.send_json(201,{'ok':True,'id':transaction_id})
+
     def update_transaction(self, transaction_id: str):
         body = self.read_json()
         allowed = {"date", "postedDate", "description", "merchant", "amountCents", "direction", "kind", "classification", "businessId", "accountId", "category", "status", "includeInTotals", "notes"}
@@ -1247,7 +1318,7 @@ class Handler(SimpleHTTPRequestHandler):
             parameters.extend((year + "-01-01", str(int(year) + 1).zfill(4) + "-01-01"))
         extra_where = (" AND " + " AND ".join(filters)) if filters else ""
         with connect() as db:
-            rows=db.execute("""SELECT t.date,t.description,a.nickname,a.last_four,t.category_name,t.amount_cents,t.direction,t.classification,t.status,d.filename,t.source_row,t.credit_treatment,t.related_transaction_id
+            rows=db.execute("""SELECT t.date,t.description,a.nickname,a.last_four,t.category_name,t.amount_cents,t.direction,t.classification,t.status,coalesce(d.filename,CASE WHEN json_extract(t.source_raw_json,'$.manualEntry') IS NOT NULL THEN 'Manual entry' ELSE '' END) AS filename,t.source_row,t.credit_treatment,t.related_transaction_id
               FROM transactions t JOIN accounts a ON a.id=t.account_id LEFT JOIN documents d ON d.id=t.document_id
               WHERE t.status='approved' AND t.excluded=0 AND t.classification='business' AND t.include_in_totals=1 AND ((t.direction='debit' AND t.transaction_kind IN ('expense','fee')) OR (t.direction='credit' AND t.transaction_kind='refund')) AND t.duplicate_of IS NULL""" + extra_where +
               " ORDER BY t.date,t.created_at", parameters).fetchall()

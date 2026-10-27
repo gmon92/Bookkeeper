@@ -256,6 +256,20 @@ and `category`. File import supports up to 1,000 rules and browser uploads up to
 
 ## Import → review → report
 
+Use **Add transaction** in **Transactions** or **Review queue** to enter an item
+without importing a statement. Choose its source account, date, description,
+positive USD amount, money movement, kind, business/personal assignment, category
+and optional notes. New entries start with no account selected and totals off.
+They are saved for review unless you explicitly include a valid business expense
+or refund. Incoming amounts can be reviewed further in **Credits & payments**.
+Manual entries do not automatically apply or create rules.
+
+The original entered values remain read-only after edits, with their creation
+and review history retained. Manual entries appear in transaction exports and
+reports and are labeled **Manual entry** rather than assigned an invented source
+document. Matching future statement rows are flagged as possible duplicates.
+Repeated saves after a lost response return the same transaction.
+
 Choose **Single file** or **Batch upload** when importing. Batch upload accepts
 up to 25 statements, 20 MB per file, and 100 MB total. Select one source account
 and shared settings for the entire batch: remember layouts, group by statement
