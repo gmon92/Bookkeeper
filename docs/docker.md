@@ -19,7 +19,8 @@ profiles can use `/data/profiles/Another profile`. Paths in this screen are
 container paths; native Windows/macOS folder pickers are unavailable in Docker.
 CSV/XLSX statement upload still uses your browser's normal file chooser.
 
-The named `bookkeeper_data` volume stores everything under `/data`:
+The project-local `bookkeeper-data` folder stores everything mounted under `/data` in the
+container:
 
 ```text
 /data/
@@ -30,10 +31,45 @@ The named `bookkeeper_data` volume stores everything under `/data`:
     documents/
 ```
 
-`docker compose down` stops/removes the container and keeps the named volume.
-`docker compose down -v` also deletes its stored profiles. Use **Data & storage →
-Download profile backup** for a portable backup containing the database, rules,
-preferences and original statements.
+If this app was previously run with the older named Docker volume, the old
+profiles remain in that volume and are not copied automatically. Before the
+first start with this updated Compose file, copy them into the new `bookkeeper-data` folder
+from PowerShell in the project folder:
+
+```powershell
+docker compose stop
+docker run --rm -v local-bookkeeper_bookkeeper_data:/source -v "${PWD}/bookkeeper-data:/destination" alpine sh -c "cp -a /source/. /destination/"
+```
+
+If you have no existing profiles, no migration is needed.
+
+`docker compose down` stops and removes the container but leaves the `bookkeeper-data`
+folder in place. Use **Data & storage → Download profile backup** for a portable
+backup containing the database, rules, preferences and original statements.
+
+## Keep live data separate from test files
+
+Use these locations in the project folder:
+
+| Host folder | Contents |
+| --- | --- |
+| `bookkeeper-data/config/` | Active Docker settings and recent profile locations |
+| `bookkeeper-data/profiles/` | Live profiles, databases, rules JSON and retained statements |
+| `tests/fixtures/` | Synthetic JSON samples and other committed test inputs |
+| `outputs/` | Temporary exports, scratch JSON and test output; ignored by Git |
+| `data/` | Previous local files, kept untouched until reviewed or migrated |
+
+Only `bookkeeper-data/` is mounted into Docker at `/data` by default. Keep each
+profile folder together: its JSON files may be required profile locators or rules,
+so a JSON extension alone does not mean a file is unused. Private data in
+`bookkeeper-data/`, `data/` and `outputs/` is excluded from Git and image builds.
+
+If your current profiles are in the old `data/` folder, download a backup from
+the running app before switching, then restore into `/data/profiles/Restored books`
+using the steps below. Export rules JSON separately as described below. Leave the
+old folder in place until you have confirmed the restored profile. If you already
+set `BOOKKEEPER_DATA_DIR` in `.env`, that setting continues to select your existing
+folder; change it explicitly when you are ready to switch.
 
 ## Bring an existing profile into Docker
 
@@ -65,24 +101,22 @@ Import rules JSON separately, or restore the extracted SQLite database to retain
 its rules. The native profile stays in its original location. Reopen the Docker
 copy later using `/data/profiles/Restored books/bookkeeper.profile.json`.
 
-## Choose your own host folder
+## Choose a different host folder
 
-Use `compose.bind.yaml` to store `/data` in an existing folder you choose instead
-of the named volume:
+The default is `./bookkeeper-data` beside `compose.yaml`. To use a different folder:
 
 1. Copy `.env.example` to `.env`.
 2. Set `BOOKKEEPER_DATA_DIR` to an existing absolute folder. On Windows, use forward
    slashes, for example `C:/BookkeeperData`.
-3. Start with both Compose files:
+3. Start the app as usual:
 
 ```powershell
-docker compose -f compose.yaml -f compose.bind.yaml up -d --build
+docker compose up -d --build
 ```
 
-Use the same two `-f` options for later Compose commands. Both profile data and
-`config/settings.json` are kept in that host folder. Existing data in a named
-volume is not automatically copied into a newly selected bind folder; use backup
-and restore to move it.
+Both profile data and `config/settings.json` are kept in that host folder. If you
+change the folder after creating profiles, the old folder remains untouched; use
+backup and restore to move profile data.
 
 If the chosen host folder already contains a profile, choose **Open profile** and
 enter `/data/bookkeeper.profile.json` (or its actual relative location under

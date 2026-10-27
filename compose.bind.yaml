@@ -1,4 +1,4 @@
-# Optional: select your own host folder instead of the named Docker volume.
+# Optional stricter bind mount for a custom folder that must already exist.
 # Set BOOKKEEPER_DATA_DIR in .env, then use both Compose files together.
 services:
   bookkeeper:
