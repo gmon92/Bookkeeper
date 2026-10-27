@@ -29,7 +29,7 @@ function syncDecisionRule(prefix,reviewed,include,available=true){
   const source=$('#'+prefix+'-rule-basis').value==='sourceCategory';
   $('#'+prefix+'-rule-merchant-fields').hidden=source;$('#'+prefix+'-rule-source-fields').hidden=!source;
   for(const field of ['pattern','source-categories','account','mode','basis']){const el=$('#'+prefix+'-rule-'+field),enabled=remember&&(field==='pattern'?!source:field==='source-categories'?source:true);el.disabled=!enabled;el.required=enabled;}
-  $('#'+prefix+'-rule-match-help').textContent=source?'Covers matching original statement categories regardless of merchant. Money-in and money-out rules remain separate.':'Matches your text anywhere in the merchant name or full description, ignoring case and punctuation. Lowes matches Lowes123 and Lowes234.';
+  $('#'+prefix+'-rule-match-help').textContent=source?'Covers matching original statement categories regardless of merchant. Money-in and money-out rules remain separate.':'Matches merchant names in either text field, ignoring case and punctuation. Spaces may vary and store numbers may follow the name. MAVIS matches MAVIS123; ADVANCE AUTO matches ADVANCEAUTO. Other word boundaries stay intact.';
   $('#'+prefix+'-rule-help').textContent=$('#'+prefix+'-rule-mode').value==='suggest'?'Future matches receive a suggestion and stay outside totals until reviewed.':reviewed?'Future matches will be reviewed automatically and '+(include?'included in business expense totals.':'kept outside business expense totals.'):'Future matches receive this category automatically and remain awaiting review, outside totals.';
 }
 function decisionRulePayload(prefix,reviewed){
@@ -125,8 +125,6 @@ function quickSuggestion(t){const s=state.suggestions?.[t.id];return s?'<button 
 // The dialogs share the existing visual language and are kept outside re-rendered pages.
 document.body.insertAdjacentHTML('beforeend',`
 <dialog id="categorize-dialog" class="modal quick-modal"><form id="categorize-form"><div class="modal-top"><span class="eyebrow">QUICK CATEGORIZE</span><button type="button" class="icon-button" data-close="categorize-dialog" aria-label="Close categorization">×</button></div><h2 id="categorize-title">One category. Many rows.</h2><p class="modal-description" id="categorize-description"></p><details id="categorize-scope" class="bulk-scope"><summary id="categorize-scope-summary"></summary><div id="categorize-scope-rows" class="quick-preview-table"></div></details><div id="categorize-controls"><div class="field-grid"><label class="field">Business books<select id="bulk-business" required></select></label><label class="field">Category for every transaction<select id="bulk-category" required></select></label></div><label class="field" id="bulk-custom-field" hidden>New category name<input id="bulk-custom-category" maxlength="100" autocomplete="off" placeholder="e.g. Vehicle maintenance"><span class="field-hint">This category will be created in the selected business books.</span></label><div class="quick-review-options"><label class="quick-check"><input type="checkbox" id="bulk-reviewed"><span><strong>Mark selected transactions reviewed</strong><small>Leave unchecked to save categories for later review.</small></span></label><label class="quick-check"><input type="checkbox" id="bulk-include" disabled><span><strong>Include eligible expenses in business totals</strong><small>Only reviewed business expenses, fees and refunds qualify.</small></span></label></div>${decisionRuleFields('bulk')}</div><div id="categorize-preview" class="quick-preview" hidden></div><p class="form-error" role="alert" hidden></p><div class="modal-footer"><button type="button" class="button button-secondary" data-close="categorize-dialog">Cancel</button><button type="submit" class="button button-primary" id="categorize-submit">Preview changes</button></div></form></dialog>
-<dialog id="rules-dialog" class="modal quick-modal"><div class="modal-top"><span class="eyebrow">MERCHANT RULES</span><button type="button" class="icon-button" data-close="rules-dialog" aria-label="Close merchant rules">×</button></div><h2>Teach your books the repeat work.</h2><p class="modal-description">A saved merchant phrase suggests a category for new or unreviewed transactions. Existing approvals stay in place.</p><button class="button button-secondary" data-quick="new-rule">Add merchant rule</button><div id="rules-list"></div><p class="form-error" role="alert" hidden></p></dialog>
-<dialog id="rule-editor-dialog" class="modal quick-modal"><form id="rule-editor-form"><div class="modal-top"><span class="eyebrow">MERCHANT RULE</span><button type="button" class="icon-button" data-close="rule-editor-dialog" aria-label="Close rule editor">×</button></div><h2>Recognize a repeat merchant.</h2><label class="field">Merchant description contains<input id="rule-pattern" required minlength="2" maxlength="120" placeholder="e.g. SHELL OIL"></label><label class="field">Source account scope<select id="rule-account" required></select></label><div class="field-grid"><label class="field">Business books<select id="rule-business" required></select></label><label class="field">Suggested category<select id="rule-category" required></select></label></div><div id="rule-preview" class="quick-preview" hidden></div><p class="field-hint">Matching finds your text anywhere in the merchant name or full description, ignoring case and punctuation. Lowes matches Lowes123 and Lowes234. Reviewed transactions, transfers and confirmed duplicates are not changed. Conflicting rules need your review.</p><p class="form-error" role="alert" hidden></p><div class="modal-footer"><button type="button" class="button button-secondary" data-close="rule-editor-dialog">Cancel</button><button class="button button-primary" type="submit" id="rule-submit">Preview matches</button></div></form></dialog>
 `);
 
 document.querySelector('#bulk-custom-field').insertAdjacentHTML('afterend','<div id="bulk-consistency-warning" class="callout" hidden><div><strong>This category is personal.</strong><p>Move the checked transactions to Personal to keep them outside business books, or choose a business category.</p><button type="button" class="button button-secondary button-small" data-consistency="bulk-personal">Move checked rows to Personal…</button></div></div>');
@@ -202,18 +200,6 @@ function bulkPreviewMarkup(plan){
   return '<div class="batch-summary"><div><span>Rows ready / selected</span><strong>'+plan.applicableCount+' / '+plan.selectedCount+'</strong></div><div><span>Combined ready activity</span><strong>'+money(plan.amountCents)+'</strong></div></div><p><strong>Accounts:</strong> '+e(plan.accounts.join(', ')||'—')+'<br><strong>Business books:</strong> '+e(plan.businesses.join(', ')||'—')+'</p>'+(plan.newCategories.length?'<p>New categories: '+plan.newCategories.map(c=>e(c.name)+' ('+e(businessName(c.businessId))+')').join(', ')+'</p>':'')+attention+decisionRulePreview(plan.rememberedRule)+'<div class="quick-preview-table"><table><thead><tr><th>Transaction</th><th>Category</th><th>Business / result</th></tr></thead><tbody>'+plan.rows.map(r=>'<tr><td>'+e(r.description)+'<small>'+e(r.date)+' · '+money(r.amountCents)+'</small><small>'+e(r.reason.split('; rule IDs:')[0])+'</small></td><td>'+e(r.old.category_name)+' → <strong>'+e(r.new.category_name)+'</strong></td><td>'+e(businessName(r.new.business_id))+'<small>'+e(r.new.status==='approved'?'Reviewed':r.new.status==='suggested'?'Suggested':'Needs review')+' · '+(r.new.include_in_totals?'Included in totals':'Outside totals')+'</small></td></tr>').join('')+'</tbody></table></div><p class="field-hint">Showing '+plan.rows.length+' of '+plan.applicableCount+' proposed changes. '+(plan.exceptionCount?'Resolve or leave out every flagged row before applying.':'Only the checked rows will change.')+' Every saved change can be undone in Data & storage.</p>';
 }
 
-function renderRuleList(){
-  $('#rules-list').innerHTML=(state.rules||[]).length?state.rules.map(r=>'<article class="quick-rule"><div><strong>'+e(r.pattern)+'</strong><p>'+e(r.account_id?accountName(state.accounts.find(a=>a.id===r.account_id)):'All source accounts')+' · '+e(businessName(r.business_id))+'</p><span class="category-tag">'+e(r.category_name)+'</span> <small>'+(r.active?'Active':'Paused')+'</small></div><div><button class="text-button" data-rule-edit="'+e(r.id)+'">Edit</button><button class="text-button" data-rule-toggle="'+e(r.id)+'">'+(r.active?'Pause':'Enable')+'</button></div></article>').join(''):emptyState('tag','One saved decision can do the repeat work.','Create a merchant rule here, or remember a merchant while categorizing a group.','','compact');
-}
-function openRuleEditor(id=''){
-  openAutomationRule('expense',id);
-}
-function ruleCategoryOptions(selected=''){
-  const business=$('#rule-business').value;
-  $('#rule-category').innerHTML='<option value="">Choose a category</option>'+quickOptions([...new Set(state.categories.filter(c=>(!c.business_id||c.business_id===business)&&!/uncategorized/i.test(c.name)).map(c=>c.name))].sort().map(n=>[n,n]),selected);
-}
-function rulePayload(){return {id:triage.rule.id||undefined,pattern:$('#rule-pattern').value.trim(),accountId:$('#rule-account').value==='*'?null:$('#rule-account').value,businessId:$('#rule-business').value,category:$('#rule-category').value};}
-
 document.addEventListener('click',event=>{
   const layout=event.target.closest('[data-group-layout]');if(layout){state.groupLayout=layout.dataset.groupLayout;saveProfilePreferences({groupLayout:state.groupLayout});render();}
   const quick=event.target.closest('[data-quick]');
@@ -224,7 +210,7 @@ document.addEventListener('click',event=>{
     if(action==='back-groups'){triage.merchant='';triage.sourceGroup=null;triage.view='groups';state.selected.clear();render();}
     if(action==='suggestions')openCategorize([...state.selected],'suggestions');
     if(action==='rules'){ruleDesk.type='expense';navigate('automation');}
-    if(action==='new-rule')openRuleEditor();
+    if(action==='new-rule')openAutomationRule('expense');
     if(action==='select-results'){const results=filteredLedger();results.slice(0,5000).forEach(t=>state.selected.add(t.id));updateLedger();if(results.length>5000)toast('Selected the first 5,000 matching rows. Categorize these before selecting the next set.');}
     if(action==='clear-merchant'){triage.merchant='';triage.sourceGroup=null;state.selected.clear();render();}
     if(action==='reset'){triage.resultIds=null;Object.assign(triage,{sourceCategory:'',category:'',classification:'',direction:'',from:'',to:'',min:'',max:'',focus:'all',merchant:'',sourceGroup:null});state.query='';state.account='';state.document='';state.tab='all';state.selected.clear();render();}
@@ -235,7 +221,6 @@ document.addEventListener('click',event=>{
   const group=event.target.closest('[data-group-categorize]');if(group){const rows=triage.groups[Number(group.dataset.groupCategorize)][1];const source=triage.grouping==='sourceCategory';openCategorize(rows.map(r=>r.id),'categorize',{label:source?'Statement category: '+(rows[0].sourceCategory||'No statement category'):merchantFamily(rows[0])+' · '+rows[0].account,sourceCategory:source?rows[0].sourceCategory:null});}
   const category=event.target.closest('[data-quick-category]');if(category){event.stopImmediatePropagation();openCategorize([category.dataset.quickCategory]);}
   const suggest=event.target.closest('[data-suggest-row]');if(suggest){event.stopImmediatePropagation();const s=state.suggestions?.[suggest.dataset.suggestRow];if(s?.conflict){ruleDesk.type='expense';navigate('automation');}else openCategorize([suggest.dataset.suggestRow],'suggestions');}
-  const edit=event.target.closest('[data-rule-edit]');if(edit)openRuleEditor(edit.dataset.ruleEdit);
 });
 document.addEventListener('change',event=>{
   const el=event.target;
@@ -243,11 +228,9 @@ document.addEventListener('change',event=>{
   if(el.matches('[data-quick-filter]')){triage[el.dataset.quickFilter]=el.value;state.selected.clear();updateLedger();}
   if(el.matches('[data-group-select]')){triage.groups[Number(el.dataset.groupSelect)][1].forEach(t=>el.checked?state.selected.add(t.id):state.selected.delete(t.id));updateLedger();}
   if(el.closest('#categorize-controls')){if(el.id==='bulk-business')bulkCategoryOptions();if(el.id==='bulk-category')syncBulkCustom();if(el.id==='bulk-reviewed'){$('#bulk-include').disabled=!el.checked;if(!el.checked)$('#bulk-include').checked=false;}invalidateBulk();}
-  if(el.closest('#rule-editor-form')){if(el.id==='rule-business')ruleCategoryOptions();triage.rule.revision=null;$('#rule-preview').hidden=true;$('#rule-submit').textContent='Preview matches';}
 });
 document.addEventListener('input',event=>{
   if(event.target.closest('#categorize-controls'))invalidateBulk();
-  if(event.target.closest('#rule-editor-form')){triage.rule.revision=null;$('#rule-preview').hidden=true;$('#rule-submit').textContent='Preview matches';}
 });
 document.addEventListener('keydown',event=>{
   if(event.ctrlKey||event.metaKey||event.altKey||event.target.closest('input,textarea,select,[contenteditable=true]')||document.querySelector('dialog[open]'))return;
@@ -273,16 +256,4 @@ document.querySelector('#categorize-form').addEventListener('submit',async event
     }
   }catch(error){batch.revision=null;button.textContent='Preview selected transactions';batch.blocked=false;showError(form,error);}
   finally{setBatchBusy('category',false);}
-});
-
-document.querySelector('#rule-editor-form').addEventListener('submit',async event=>{
-  event.preventDefault();const form=event.currentTarget,payload=rulePayload();busy(form,true);
-  try{
-    if(!triage.rule.revision){const preview=await post('/api/rules/preview',payload);triage.rule.revision=JSON.stringify(payload);$('#rule-preview').innerHTML='<p><strong>'+preview.count+' unreviewed transactions match.</strong> '+money(preview.amountCents)+' in activity. Saving this rule will make suggestions available; it will not change transactions.</p><div class="quick-preview-table"><table><thead><tr><th>Matched merchant</th><th>Amount / movement</th><th>Why this matches</th><th>Current category</th></tr></thead><tbody>'+preview.rows.map(r=>'<tr><td>'+e(r.description)+'<small>'+e(r.date)+' · source row '+e(r.sourceRow||'—')+'</small></td><td>'+money(r.amountCents)+'<small>'+e(r.direction)+' · original '+e(r.rawAmount)+'</small></td><td>'+e(r.reason)+'</td><td>'+e(r.category)+'</td></tr>').join('')+'</tbody></table></div><p class="field-hint">Showing up to 30 matches. Future matching imports will receive the same suggestion.</p>';$('#rule-preview').hidden=false;$('#rule-submit').textContent='Save merchant rule';}
-    else{await post('/api/rules',payload);$('#rule-editor-dialog').close();await loadData({quiet:true});renderRuleList();toast('Merchant rule saved. Review its suggestions before applying.');}
-  }catch(error){showError(form,error);}finally{busy(form,false);}
-});
-document.addEventListener('click',async event=>{
-  const button=event.target.closest('[data-rule-toggle]');if(!button)return;const rule=state.rules.find(r=>r.id===button.dataset.ruleToggle);button.disabled=true;
-  try{await post('/api/rules',{id:rule.id,active:!rule.active});await loadData({quiet:true});renderRuleList();}catch(error){toast(error.message);button.disabled=false;}
 });

@@ -109,14 +109,14 @@ class PersonalConsistencyTests(unittest.TestCase):
                              'category': 'Personal / non-business'}, self.handler.validate_transaction)
         self.assertEqual(self.snapshot(), before)
 
-    def test_both_rule_apis_reject_new_personal_business_rules(self):
+    def test_rule_apis_reject_personal_business_refunds_and_included_personal_expenses(self):
         before = self.snapshot()
         for mode in automation.MODES:
             for kind in ('expense', 'credit'):
                 with self.subTest(mode=mode, kind=kind):
                     status, body = self.request('/api/automation/rules', {'type': kind, 'patterns': ['PLUS MEMBERSHIP'],
                         'businessId': self.fixture.business, 'category': 'Personal / non-business',
-                        'mode': mode, 'treatment': 'refund'})
+                        'mode': mode, 'treatment': 'refund','includeInTotals':kind=='expense'})
                     self.assertEqual(status, 400)
                     self.assertIn('personal', body['error'].lower())
         status, _ = self.request('/api/rules', {'pattern': 'PLUS MEMBERSHIP', 'businessId': self.fixture.business,

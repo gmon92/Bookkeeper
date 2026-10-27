@@ -24,6 +24,11 @@ def transaction_issue(row):
 
 def rule_issue(rule):
     if rule['business_id'] and is_personal_category(rule['category_name']):
+        rule=dict(rule)
+        # Expense rules use business_id to locate the category, then explicitly
+        # clear the transaction's business assignment and mark it personal.
+        if rule.get('type','expense')=='expense' and not rule.get('treatment') and not rule.get('include_expenses'):
+            return None
         return RULE_MESSAGE
     return None
 

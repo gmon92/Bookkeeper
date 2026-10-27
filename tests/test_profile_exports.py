@@ -44,15 +44,16 @@ class ProfileExportTests(unittest.TestCase):
         self.fixture.import_csv('other-account',b'Date,Description,Debit,Credit\n10/01/2025,OTHER BUSINESS,25.00,\n')
 
     def export_excel(self, portable=True):
-        self.handler.path='/api/export.xlsx?businessId='+self.fixture.business+'&year=2026&portable='+('1' if portable else '0')
+        self.handler.path='/api/export.xlsx?view=ledger&businessId='+self.fixture.business+'&year=2026&portable='+('1' if portable else '0')
         content,_,_=self.handler.export_excel()
         return content
 
-    def table_state(self):
+    def table_state(self, include_rules=True):
         with server.connect() as db:
             return {table:[tuple(r) for r in db.execute('SELECT * FROM '+table+' ORDER BY rowid')] for table in (
                 'transactions','merchant_rules','credit_rules','accounts','businesses','categories','import_profiles',
-                'original_transactions','source_rows','source_archives','transaction_history','review_actions')}
+                'original_transactions','source_rows','source_archives','transaction_history','review_actions')
+                if include_rules or table not in {'merchant_rules','credit_rules'}}
 
     def reopen(self, content, suffix, upload=False):
         source=self.root/('export'+suffix); source.write_bytes(content)
@@ -68,11 +69,15 @@ class ProfileExportTests(unittest.TestCase):
         self.assertEqual(status,200)
         return target
 
-    def assert_future_automation(self):
+    def assert_future_automation(self, enabled=True):
         self.fixture.import_csv('card',b'Date,Description,Debit,Credit,Category\n11/01/2026,SUPPLIER PURCHASE,17.25,,Supplies\n11/02/2026,Platinum Walmart+ Credit,,9.50,Benefits\n11/03/2026,UNSEEN VEHICLE STORE,40.50,,Travel\n')
         with server.connect() as db:
             charge=db.execute("SELECT * FROM transactions WHERE date='2026-11-01'").fetchone()
             credit=db.execute("SELECT * FROM transactions WHERE date='2026-11-02'").fetchone()
+            if not enabled:
+                for row in db.execute("SELECT * FROM transactions WHERE date>='2026-11-01'"):
+                    self.assertEqual((row['status'],row['include_in_totals'],row['credit_treatment']),('needs_review',0,''))
+                return
             self.assertEqual((charge['category_name'],charge['status'],charge['include_in_totals']),('Meals','approved',1))
             self.assertEqual((credit['credit_treatment'],credit['status'],credit['include_in_totals']),('statement_credit','approved',0))
             vehicle=db.execute("SELECT * FROM transactions WHERE date='2026-11-03'").fetchone()
@@ -89,8 +94,8 @@ class ProfileExportTests(unittest.TestCase):
         self.assertEqual(server.active_profile()['settings']['sort'],'merchant')
         self.assert_future_automation()
 
-    def test_filtered_excel_contains_full_profile_and_can_resume_new_session(self):
-        before=self.table_state()
+    def test_filtered_excel_resumes_books_without_rule_definitions(self):
+        before=self.table_state(include_rules=False)
         content=self.export_excel()
         workbook=load_workbook(io.BytesIO(content),read_only=True,data_only=True)
         try:
@@ -98,12 +103,16 @@ class ProfileExportTests(unittest.TestCase):
             self.assertIn('Profile Restore',workbook.sheetnames)
             rows=list(workbook['Expense Ledger'].iter_rows(min_row=4,values_only=True))
             self.assertNotIn('OTHER BUSINESS',{row[1] for row in rows})
+            embedded=self.root/'embedded.sqlite3'
+            embedded.write_bytes(reports.read_profile(workbook))
+            with closing(sqlite3.connect(embedded)) as db:
+                self.assertEqual(db.execute('SELECT (SELECT count(*) FROM merchant_rules)+(SELECT count(*) FROM credit_rules)').fetchone()[0],0)
         finally: workbook.close()
         self.reopen(content,'.xlsx',upload=True)
-        self.assertEqual(self.table_state(),before)
+        self.assertEqual(self.table_state(include_rules=False),before)
         self.assertEqual(server.active_profile()['settings']['groupImportsBySourceCategory'],True)
-        self.assertEqual(server.active_profile()['ruleCount'],3)
-        self.assert_future_automation()
+        self.assertEqual(server.active_profile()['ruleCount'],0)
+        self.assert_future_automation(enabled=False)
 
     def test_restored_excel_profile_survives_another_session_open(self):
         target=self.reopen(self.export_excel(),'.xlsx')
@@ -111,8 +120,8 @@ class ProfileExportTests(unittest.TestCase):
         location=workspace_store.locate_books(saved['profile'])
         server.activate_workspace(location['directory'],database=location['database'],profile=location['profile'])
         self.assertEqual(server.DB_PATH,target/'bookkeeper.sqlite3')
-        self.assertEqual(server.active_profile()['ruleCount'],3)
-        self.assert_future_automation()
+        self.assertEqual(server.active_profile()['ruleCount'],0)
+        self.assert_future_automation(enabled=False)
 
     def test_plain_ledger_can_be_shared_without_any_profile_payload(self):
         content=self.export_excel(portable=False)
@@ -136,12 +145,40 @@ class ProfileExportTests(unittest.TestCase):
         self.assertEqual(self.table_state(),before)
 
     def test_editing_visible_report_cells_does_not_change_the_profile_snapshot(self):
-        before=self.table_state()
+        before=self.table_state(include_rules=False)
         workbook=load_workbook(io.BytesIO(self.export_excel()))
         workbook['Expense Ledger']['E4']='Edited in Excel'
         changed=io.BytesIO();workbook.save(changed);workbook.close()
         self.reopen(changed.getvalue(),'.xlsx')
+        self.assertEqual(self.table_state(include_rules=False),before)
+        self.assertEqual(server.active_profile()['ruleCount'],0)
+
+    def test_legacy_excel_cannot_restore_rules_hidden_in_its_database(self):
+        workbook=load_workbook(io.BytesIO(self.export_excel(portable=False)))
+        reports.add_profile(workbook,backup.export_database(server.DB_PATH),server.active_profile())
+        content=io.BytesIO(); workbook.save(content); workbook.close()
+        before=self.table_state(include_rules=False)
+        self.reopen(content.getvalue(),'.xlsx',upload=True)
+        self.assertEqual(self.table_state(include_rules=False),before)
+        self.assertEqual(server.active_profile()['ruleCount'],0)
+
+    def test_zip_restore_keeps_books_and_originals_without_loading_rules(self):
+        before=self.table_state(include_rules=False)
+        content=backup.create_backup(server.DB_PATH,server.DATA_DIR)
+        original=server.DB_PATH
+        target=self.reopen(content,'.zip',upload=True)
+        self.assertEqual(self.table_state(include_rules=False),before)
+        self.assertEqual(server.active_profile()['ruleCount'],0)
+        self.assertTrue(any((target/'documents').iterdir()))
+        with closing(sqlite3.connect(original)) as db:
+            self.assertEqual(db.execute('SELECT (SELECT count(*) FROM merchant_rules)+(SELECT count(*) FROM credit_rules)').fetchone()[0],3)
+
+    def test_copy_profile_explicitly_copies_its_database_rules(self):
+        before=self.table_state()
+        server.configure_workspace({'mode':'copy','sourceDirectory':str(self.root),
+            'directory':str(self.root/'copied-books')})
         self.assertEqual(self.table_state(),before)
+        self.assertEqual(server.active_profile()['ruleCount'],3)
 
     def test_portable_ledger_cannot_be_mistaken_for_a_bank_statement(self):
         with self.assertRaisesRegex(ValueError,'Restore export / backup'):

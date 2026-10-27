@@ -21,7 +21,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from statement_import import parse_statement
-from reports import excel_report, safe_text
+from reports import excel_report, excel_summary, safe_text
 from backup import create_backup, restore_backup, export_database
 import categorization
 import credits
@@ -214,6 +214,7 @@ def active_profile():
     with connect() as db:
         return {'name':db.execute("SELECT value FROM app_metadata WHERE key='profile_name'").fetchone()[0],
             'file':str(PROFILE_PATH),'database':str(DB_PATH),'directory':str(DATA_DIR),'settings':workspace_store.profile_settings(db),
+            'rulesFile':str(DATA_DIR/'bookkeeper.rules.json'),'rulesFileExists':(DATA_DIR/'bookkeeper.rules.json').is_file(),
             'transactionCount':db.execute('SELECT count(*) FROM transactions').fetchone()[0],
             'ruleCount':db.execute('SELECT (SELECT count(*) FROM merchant_rules)+(SELECT count(*) FROM credit_rules)').fetchone()[0]}
 
@@ -294,7 +295,7 @@ def configure_workspace(body):
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
                 if json.loads(archive.read('manifest.json'))['missingSources']:
                     raise ValueError('Some retained originals are missing. Open the existing profile to use its SQLite source archive, or recover the files before copying.')
-            restore_backup(io.BytesIO(content),directory,allow_empty=True)
+            restore_backup(io.BytesIO(content),directory,allow_empty=True,include_rules=True)
         activate_workspace(directory,remember=True,name=name)
     return {'ok':True,'directory':str(DATA_DIR),'database':str(DB_PATH),'workspaceId':WORKSPACE_ID}
 
@@ -592,6 +593,13 @@ class Handler(SimpleHTTPRequestHandler):
         if path == '/api/rules':
             with connect() as db:
                 return self.send_json(200,categorization.rules(db))
+        if path == '/api/automation/rules-json':
+            with connect() as db:
+                return self.send_json(200,automation.editable_rules(db))
+        if path == '/api/automation/rules-json/file':
+            location=DATA_DIR/'bookkeeper.rules.json'
+            if not location.is_file(): raise ValueError('Use Copy path or Open file in Reports to create the rules JSON first.')
+            return self.send_json(200,json.loads(location.read_text(encoding='utf-8-sig')))
         if path == '/api/suggestions':
             with connect() as db:
                 return self.send_json(200,categorization.suggestions(db))
@@ -608,7 +616,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/export.csv":
             return self.export_csv()
         if path in {'/','/index.html'}:return self.serve_interface()
-        if path in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/rule_library.js','/automation.css','/profile_ui.js'}:
+        if path in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/rule_library.js','/automation.css','/profile_ui.js','/safeguards.js'}:
             return super().do_GET()
         return self.send_error(404)
 
@@ -630,7 +638,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_HEAD(self):
         # SimpleHTTPRequestHandler otherwise allows HEAD to bypass GET's allowlist.
         if self.local_request() and unquote(urlparse(self.path).path) in {'/','/index.html'}:return self.serve_interface(head=True)
-        if self.local_request() and unquote(urlparse(self.path).path) in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/rule_library.js','/automation.css','/profile_ui.js'}:
+        if self.local_request() and unquote(urlparse(self.path).path) in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/rule_library.js','/automation.css','/profile_ui.js','/safeguards.js'}:
             return super().do_HEAD()
         return self.send_error(404)
 
@@ -711,6 +719,64 @@ class Handler(SimpleHTTPRequestHandler):
                         if not isinstance(body.get('revision'),str): raise ValueError('Preview automation before applying.')
                         result=automation.apply(db,self,utc_now(),revision=body['revision'])
                 return self.send_json(200,result)
+            if path == '/api/automation/rules-json':
+                payload=self.read_json()
+                with connect() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    result=automation.import_editable_rules(db,payload,utc_now())
+                    location=DATA_DIR/'bookkeeper.rules.json'
+                    try:
+                        content=location.read_bytes()
+                        imported_saved_file=json.loads(content)==payload
+                    except (OSError,ValueError): imported_saved_file=False
+                    if imported_saved_file:
+                        # These external edits were explicitly imported, so the
+                        # next copy/open may refresh their canonical rule IDs.
+                        db.execute("INSERT INTO app_metadata(key,value) VALUES('rules_file_export_hash',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                            (hashlib.sha256(content).hexdigest(),))
+                return self.send_json(200,result)
+            if path == '/api/automation/rules-json/file':
+                body=self.read_json()
+                refresh=body.get('refresh',False)
+                open_file=body.get('open',False)
+                if type(refresh) is not bool or type(open_file) is not bool: raise ValueError('Choose whether to refresh or open the rules export.')
+                location=DATA_DIR/'bookkeeper.rules.json'
+                if location.exists() and not location.is_file(): raise ValueError('The rules JSON location is not a file. Rename that folder before creating an export.')
+                created=not location.exists()
+                backup_path=None; exported=False
+                with connect() as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    payload=automation.editable_rules(db)
+                    count=len(payload['rules'])
+                    previous=location.read_bytes() if not created else None
+                    same_document=False; legacy_document=False
+                    if previous is not None:
+                        try:
+                            document=json.loads(previous)
+                            same_document=document==payload
+                            legacy_document=isinstance(document,dict) and '_comments' not in document and document=={k:v for k,v in payload.items() if k!='_comments'}
+                        except ValueError: pass
+                    saved=db.execute("SELECT value FROM app_metadata WHERE key='rules_file_export_hash'").fetchone()
+                    unedited=legacy_document or (previous is not None and saved is not None and hashlib.sha256(previous).hexdigest()==saved[0])
+                    external_edits=previous is not None and not same_document and not unedited
+                    if created or refresh or unedited or same_document:
+                        if not same_document:
+                            if external_edits:
+                                backup_path=location.with_name('bookkeeper.rules.backup-'+uuid.uuid4().hex[:12]+'.json')
+                                with backup_path.open('xb') as stream: stream.write(previous)
+                            workspace_store.atomic_json(location,payload)
+                            exported=True
+                        db.execute("INSERT INTO app_metadata(key,value) VALUES('rules_file_export_hash',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                            (hashlib.sha256(location.read_bytes()).hexdigest(),))
+                        external_edits=False
+                if not location.is_file(): raise ValueError('The rules JSON location is not a file. Rename that folder before creating an export.')
+                opened=False
+                if open_file and os.name=='nt' and not os.environ.get('LOCAL_BOOKKEEPER_STORAGE_ROOT'):
+                    os.startfile(str(location))
+                    opened=True
+                return self.send_json(200,{'path':str(location),'created':created,'exported':exported,
+                    'ruleCount':count,'backup':str(backup_path) if backup_path else None,'externalEdits':external_edits,
+                    'opened':opened,'url':'/api/automation/rules-json/file' if open_file and not opened else None})
             if path in {'/api/categorization/preview','/api/categorization/apply'}:
                 body = self.read_json()
                 with connect() as db:
@@ -1130,8 +1196,11 @@ class Handler(SimpleHTTPRequestHandler):
         query = parse_qs(urlparse(self.path).query)
         business = query.get('businessId',[''])[0]
         year = query.get('year',[''])[0]
-        portable=query.get('portable',['1'])[0]
+        view=query.get('view',['summary'])[0]
+        if view not in ('summary','ledger'):raise ValueError('Choose an accountant summary or detailed ledger.')
+        portable=query.get('portable',['0'])[0]
         if portable not in ('0','1'): raise ValueError('Choose whether to include reusable profile data.')
+        if view=='summary' and portable=='1':raise ValueError('Accountant summaries never include a reusable profile. Use the separate database export for a full copy.')
         if year and not re.fullmatch(r'\d{4}',year):
             return self.send_json(400, {'error':'Choose a valid reporting year.'})
         where, params = [], []
@@ -1141,13 +1210,16 @@ class Handler(SimpleHTTPRequestHandler):
                 record = db.execute('SELECT display_name FROM businesses WHERE id=?',(business,)).fetchone()
                 if not record: return self.send_json(400, {'error':'Choose a valid business.'})
                 label = record[0]
-                where.append('(t.business_id=? OR a.business_id=?)'); params.extend((business,business))
+                where.append('(t.business_id=? OR (t.business_id IS NULL AND a.business_id=?))'); params.extend((business,business))
             if year:
                 where.append('t.date>=? AND t.date<?'); params.extend((year+'-01-01',str(int(year)+1).zfill(4)+'-01-01'))
             rows = db.execute('''SELECT t.*,a.nickname,a.last_four,d.filename,b.display_name AS business_name FROM transactions t
                 JOIN accounts a ON a.id=t.account_id LEFT JOIN documents d ON d.id=t.document_id LEFT JOIN businesses b ON b.id=t.business_id'''+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY t.date,t.id',params).fetchall()
         try:
-            data = excel_report(rows,label,year,database=export_database(DB_PATH) if portable=='1' else None,
+            if view=='summary':
+                data=excel_summary(rows,label,year)
+                return self.download(data,'bookkeeper-accountant-summary.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            data = excel_report(rows,label,year,database=export_database(DB_PATH,include_rules=False) if portable=='1' else None,
                 profile=active_profile() if portable=='1' else None)
         except ImportError:
             return self.send_json(503, {'error':'Install Excel support with python -m pip install -r requirements.txt.'})

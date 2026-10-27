@@ -40,8 +40,10 @@ preferences and original statements.
 In the Docker app, choose **Restore export / backup** and use **Choose an
 exported profile file** to upload a reusable Excel ledger, a SQLite export or a
 profile backup ZIP from your browser (up to 20 MB). Set the new destination to
-`/data/profiles/Restored books`. Rules, categories, saved decisions and preferences
-resume in the new profile. A backup ZIP also transfers original statement files.
+`/data/profiles/Restored books`. Categories, saved decisions and preferences
+resume in the new profile. Only a direct SQLite restore includes rules. Excel
+and ZIP restores exclude them; use **Rules & automation → Import JSON** to add
+rules separately. A backup ZIP also transfers original statement files.
 
 For larger files, or to use a file already on the Docker host:
 
@@ -58,8 +60,9 @@ In Docker's setup/profile screen, choose **Restore export / backup**, then **Or 
 - Backup: `/data/import.zip`
 - New destination: `/data/profiles/Restored books`
 
-Restore opens a copy with the existing transactions, categories, rules and
-preferences. The native profile stays in its original location. Reopen the Docker
+Restore opens a copy with the existing transactions, categories and preferences.
+Import rules JSON separately, or restore the extracted SQLite database to retain
+its rules. The native profile stays in its original location. Reopen the Docker
 copy later using `/data/profiles/Restored books/bookkeeper.profile.json`.
 
 ## Choose your own host folder

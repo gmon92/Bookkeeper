@@ -146,6 +146,8 @@ def plan(db, body, validate):
                 raise ValueError('Category does not exist for this business. Enable creation or choose another category.')
             if not cat: creates.add((business,name))
             new.update(category_name=cat['name'] if cat else name,category_id=cat['id'] if cat else None)
+            if mode == 'suggestions' and automation.personal_category(new['category_name']):
+                new.update(category_id=None,classification='personal',business_id=None,excluded=1,include_in_totals=0)
             candidate = dict(row) | new
             consistency.validate_transaction(candidate)
             if reviewed:
@@ -175,7 +177,7 @@ def plan(db, body, validate):
     public = {'revision':revision,'selectedCount':len(rows),'applicableCount':len(changes),'exceptionCount':len(exceptions),
               'amountCents':sum(c['amountCents'] for c in changes),'exceptions':exceptions,
               'accounts':sorted({accounts[c['accountId']] for c in changes}),
-              'businesses':sorted({businesses[c['new']['business_id']] for c in changes}),
+        'businesses':sorted({businesses[c['new']['business_id']] if c['new']['business_id'] else 'Personal / non-business' for c in changes}),
               'newCategories':[{'businessId':b,'name':n} for b,n in sorted(creates)],'rememberedRule':remembered_rule,
               'rows':[{k:v for k,v in c.items() if k!='version'} for c in changes[:40]]}
     return public, changes, creates

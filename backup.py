@@ -15,19 +15,27 @@ from zipfile import ZipFile, ZIP_DEFLATED
 import workspace_store
 
 
-def database_snapshot(database_path, destination_path):
+def clear_rules(db):
+    """Remove automation definitions from a restored/exported books copy."""
+    tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for table in ('merchant_rules','credit_rules'):
+        if table in tables: db.execute('DELETE FROM '+table)
+
+
+def database_snapshot(database_path, destination_path, include_rules=True):
     with closing(sqlite3.connect(database_path)) as source, closing(sqlite3.connect(destination_path)) as destination:
         source.backup(destination)
         if destination.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='staged_imports'").fetchone():
             destination.execute('DELETE FROM staged_imports')
+        if not include_rules: clear_rules(destination)
         destination.commit()
 
 
-def export_database(database_path):
+def export_database(database_path, include_rules=True):
     """Return a consistent standalone SQLite file, including committed WAL data."""
     with tempfile.TemporaryDirectory() as directory:
         copy = Path(directory)/'bookkeeper.sqlite3'
-        database_snapshot(database_path,copy)
+        database_snapshot(database_path,copy,include_rules=include_rules)
         return copy.read_bytes()
 
 
@@ -60,7 +68,7 @@ def create_backup(database_path, data_directory):
     return result.getvalue()
 
 
-def restore_database(content, target_directory, allow_empty=False):
+def restore_database(content, target_directory, allow_empty=False, include_rules=True):
     target = Path(target_directory).resolve()
     if target.exists() and (not allow_empty or not target.is_dir() or any(target.iterdir())):
         raise ValueError('Restore requires a new directory. Existing books are never overwritten.')
@@ -70,6 +78,9 @@ def restore_database(content, target_directory, allow_empty=False):
         database=staging/'bookkeeper.sqlite3'; database.write_bytes(content)
         workspace_store.validate_existing(str(database))
         with closing(sqlite3.connect(database)) as db:
+            if not include_rules:
+                clear_rules(db)
+                db.commit()
             if db.execute('PRAGMA integrity_check').fetchone()[0]!='ok' or db.execute('PRAGMA foreign_key_check').fetchone():
                 raise ValueError('The exported database failed its integrity check.')
             profile=workspace_store.profile_document(db,'bookkeeper.sqlite3')
@@ -80,7 +91,12 @@ def restore_database(content, target_directory, allow_empty=False):
     return {'version':1,'missingSources':missing,'databaseOnly':True}
 
 
-def restore_backup(archive_path, target_directory, allow_empty=False):
+def restore_backup(archive_path, target_directory, allow_empty=False, include_rules=False):
+    """Restore books; only a direct SQLite input carries rules by default.
+
+    include_rules is for the explicit internal profile-copy operation. File
+    restores through the app do not accept this override.
+    """
     target = Path(target_directory).resolve()
     if target.exists() and (not allow_empty or not target.is_dir() or any(target.iterdir())):
         raise ValueError('Restore requires a new directory. Existing books are never overwritten.')
@@ -105,7 +121,7 @@ def restore_backup(archive_path, target_directory, allow_empty=False):
             workbook=load_workbook(archive_path,read_only=True,data_only=False)
             try: content=read_profile(workbook)
             finally: workbook.close()
-            return restore_database(content,target,allow_empty)
+            return restore_database(content,target,allow_empty,include_rules=include_rules)
         if 'manifest.json' not in archive.namelist():
             raise ValueError('This ZIP does not contain a Local Bookkeeper profile backup.')
         manifest = json.loads(archive.read('manifest.json'))
@@ -132,6 +148,9 @@ def restore_backup(archive_path, target_directory, allow_empty=False):
             with closing(sqlite3.connect(staging/'bookkeeper.sqlite3')) as db:
                 if db.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or db.execute('PRAGMA foreign_key_check').fetchone():
                     raise ValueError('Restored database integrity check failed.')
+                if not include_rules:
+                    clear_rules(db)
+                    db.commit()
             if target.exists(): target.rmdir()  # Only an empty, explicitly chosen destination can reach this point.
             staging.rename(target)
     return manifest

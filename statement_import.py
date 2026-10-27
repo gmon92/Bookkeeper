@@ -35,7 +35,7 @@ def parse_xlsx(content, filename, csv_parser):
         raise ValueError("This file is not a readable XLSX workbook.") from exc
     try:
         if '_Bookkeeper_Profile' in workbook.sheetnames:
-            raise ValueError('This is a reusable Local Bookkeeper ledger. Use Open / switch profile → Restore export / backup to restore its transactions, rules and categorizations into new books.')
+            raise ValueError('This is a reusable Local Bookkeeper ledger. Use Open / switch profile → Restore export / backup to restore its transactions and categorizations into new books. Import rules separately from SQLite or rules JSON.')
         candidates = []
         for sheet in workbook:
             for row_number, values in enumerate(sheet.iter_rows(values_only=True), 1):

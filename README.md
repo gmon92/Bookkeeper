@@ -68,30 +68,40 @@ and automation levels, categories, businesses, accounts, confirmed import layout
 view preferences, history and original row archives. Open it directly with **Open
 profile**, or use **Restore export / backup** to copy it into new books.
 
-Excel expense ledgers now default to **Include reusable profile** in Reports.
-The visible financial worksheets follow the business/year report filters. The
-embedded profile covers **every business and year**, which is stated beside the
-export button and on the workbook's **Profile Restore** tab. Uncheck the option
-to share just the filtered report without a profile copy. The profile uses a
-checksum-verified SQLite snapshot stored in workbook cells, so its rules and IDs
-resume exactly rather than being inferred from ledger labels or rounded amounts.
+Reports exports an **accountant summary** with two worksheets: category totals
+and activity outside expense totals on the first, and monthly totals on the
+second. The selected business and year limit the report. Charges and refunds
+are shown separately, and pending activity stays outside the net expense total.
+The workbook contains no transaction rows, hidden profile, rules or original row
+data. Use the separate SQLite export or profile backup for complete books.
 
-To start a new session, open the profile chooser, select **Restore export /
-backup**, upload the exported `.xlsx` or `.sqlite3` file, and choose a new empty
-folder. The restored profile opens with its rules and categorization decisions;
-those rules continue running on future matching imports. The uploaded file can
-come from another local device or the browser connected to Docker.
+Previously exported reusable Excel ledgers remain restorable. The legacy
+`view=ledger&portable=1` API export retains that format for compatibility, with
+a checksum-verified SQLite snapshot containing decisions and preferences but
+excluding automation rule definitions.
+
+To resume from a SQLite export or a previously created reusable Excel ledger,
+open the profile chooser, select **Restore export / backup**, upload that
+`.xlsx` or `.sqlite3` file, and choose a new empty
+folder. Both formats retain categorization decisions. Only a direct SQLite
+database restores saved rules. Excel and ZIP restores exclude rules, including
+rules hidden in older Excel exports. Import an editable rules JSON file through
+**Rules & automation** to add rules separately. The uploaded file can come from
+another local device or the browser connected to Docker.
 
 Editing the visible spreadsheet report does not change its embedded profile.
 Make decisions in the app and export a new copy. Older Excel reports, CSV ledgers,
-and reports exported without reusable profile data cannot recreate saved rules;
+and reports exported without reusable profile data cannot recreate a profile;
 restore a newer portable export or SQLite database instead. Excel embedding
 supports database snapshots up to 64 MB. Database exports have no Excel limit.
 
 Original statement **row data** is retained in the database and reusable ledger.
 Original statement **files** are included by **Download profile backup**; use that
-ZIP when you want those files transferred too. Restores always use new/empty
-folders and never merge or overwrite existing books.
+ZIP when you want those files transferred too. ZIP backups retain the full
+database for recovery, but the app's ZIP restore excludes rule definitions.
+Export rules JSON separately, or extract and open the SQLite database when you
+want to recover rules. Restores always use new/empty folders and never merge or
+overwrite existing books.
 
 ## Profiles for each user
 
@@ -136,6 +146,97 @@ transactions**.
 Transaction **Sort** is in the table toolbar beside the search/account controls
 in Transactions and Review queue. Credits & payments has the same newest/oldest,
 amount and merchant sorting options. The selected sort order is saved per profile.
+
+## Edit rules outside the app
+
+An **Are you sure?** prompt explains rule and profile actions before they run. It
+names the active profile and describes account/business scope, automatic review
+and totals behavior, profile switching/restoration, or exported file contents as
+appropriate. Saving, importing, enabling/pausing rules, applying automation,
+creating/copying/opening/restoring/renaming profiles, changing import grouping,
+and copying/opening/exporting rule files require confirmation. Cancel stops that
+action before it sends a request or starts a download. Previews and routine view
+filters remain available without committing changes.
+
+**Rules & automation** is the central place to manage expense and credit rules.
+The save-rule controls beside transaction decisions create rules in this same
+collection. CSV and Excel statement imports apply saved rules to new rows but
+never create or edit rule definitions. SQLite databases and explicit rules JSON
+imports are the supported ways to bring in rules from a file.
+
+In **Rules & automation**, choose **Export JSON** to download
+`local-bookkeeper-rules.json`. Edit it in any text editor, then choose **Import
+JSON** in the same screen to save your changes to the active profile.
+
+Every export starts with a `_comments` guide explaining the file sections, every
+rule field, matching priority, expense categories, credit treatments, review
+levels and `includeInTotals`, with examples. It is ordinary JSON data rather than
+`//` comments, so the file stays valid JSON. The importer ignores this guide and
+its examples; only objects in `rules` are saved as rules. You may edit or remove
+the guide. Existing unedited exports receive it during the next confirmed refresh.
+
+Reports shows one **Rules JSON** path with **Copy path** and **Open file** buttons.
+Both create `bookkeeper.rules.json` beside the active profile if needed, containing
+every saved expense and credit rule across all accounts and businesses, including
+paused rules. After the active profile loads on app startup, a confirmation offers
+to refresh its rules JSON automatically. This runs once per app session, without
+requiring a visit to Reports. An unedited export also refreshes when copied or
+opened. External file edits are preserved; import them explicitly in Rules &
+automation to apply them. Open file uses the default desktop application on Windows,
+or displays the saved JSON in the browser when running in Docker. The profile
+locator (`bookkeeper.profile.json`) remains in Data & storage and contains only
+the database location. Use **Export JSON** for a separate download of current rules.
+
+- Keep an exported entry's `id` to update that rule. To add a rule, copy an entry
+  and remove its `id`, or write a new entry without `id`.
+- `reference` lists your active business IDs, account IDs and category names.
+  Copy those values into the rules; editing `reference` does not create accounts,
+  businesses or categories. Create those in the app first.
+- `accountId: null` explicitly covers all source accounts. A specific account ID
+  limits the rule to that account. Expense rules need `businessId` and `category`.
+- Unchanged rules and repeated identical additions are skipped. Entries omitted
+  from the file remain saved. Set `active: false` to pause an exported rule.
+- The entire file is validated before saving. An invalid entry reports its rule
+  number and leaves all rules unchanged. Existing transactions stay as they are;
+  use **Preview rules on existing rows** to review and apply the saved rules.
+
+For example, a new expense rule can look like this. Replace the business ID with
+one from your exported file's `reference.businesses` list:
+
+```json
+{
+  "format": "local-bookkeeper-rules",
+  "version": 1,
+  "rules": [
+    {
+      "type": "expense",
+      "patterns": ["OFFICE DEPOT", "STAPLES"],
+      "accountId": null,
+      "businessId": "COPY-YOUR-BUSINESS-ID-HERE",
+      "category": "Office supplies",
+      "mode": "categorize",
+      "includeInTotals": false,
+      "active": true
+    }
+  ]
+}
+```
+
+`patterns` match merchant/description phrases with optional spaces and trailing store numbers, with any phrase sufficient
+to match. Use `sourceCategories` for original statement category labels. If both
+lists are present, a transaction must match a phrase **and** a category. Optional
+`minAmount` and `maxAmount` set inclusive, nonnegative amount limits in dollars
+(for example, `"10.25"`); `null` leaves a limit open.
+
+Automation `mode` is `suggest`, `categorize` or `review`. `suggest` proposes a
+decision; `categorize` assigns it but leaves review pending; `review` automatically
+approves eligible future matches. Only a `review` rule for a business expense or
+refund can set `includeInTotals: true`.
+
+Money-in rules use `type: "credit"` and a `treatment` of `payment`, `refund`,
+`statement_credit` or `excluded_credit`. Business refunds also use `businessId`
+and `category`. File import supports up to 1,000 rules and browser uploads up to
+5 MB. File edits take effect after you import the file.
 
 ## Import → review → report
 
@@ -373,13 +474,20 @@ in one place. Existing saved rules retain their destinations and begin in
   amount bounds. All other
   supplied conditions must match together. Expense rules match money out; credit
   rules match money in.
-- Merchant rules use **contains** matching in the merchant name or full
-  transaction description, ignoring case and punctuation. Enter `Lowes` to match
-  `Lowes123`, `Lowes234`, or `CARD PURCHASE LOWES567`; no wildcard is needed.
+- Merchant rules match names in the merchant field or full transaction description,
+  ignoring case and punctuation. Spaces between phrase words may be omitted, and
+  store numbers may follow a name: `MAVIS` matches `MAVIS123`, and `ADVANCE AUTO`
+  matches `ADVANCEAUTO`. Word boundaries stay intact: `MAVIS` does not match
+  `MAVISION`, and `APPLE.COM` does not match `PINEAPPLE.COM`. Explicit store
+  numbers stay exact: `STORE 12` does not match `STORE 123`. No wildcard is needed.
   Existing merchant rules use this behavior too. Original statement category
   labels still match complete normalized labels. To change existing eligible
   unreviewed transactions, choose **Run rule check**, inspect the preview, then
   apply it. New imports use the saved rule's automation level automatically.
+- Expense rules targeting **Personal / non-business** classify matches as personal,
+  remove the business assignment and exclude them from expense totals. Their
+  business selection identifies the existing category catalog only. Keep
+  `includeInTotals` false. Business refunds cannot use a personal category.
 - Choose the business/category or a credit treatment: payment, refund, statement
   benefit or other excluded credit. Refunds may belong to business books or stay
   outside them. Rules never automatically link payment pairs or original purchases.
@@ -600,8 +708,9 @@ the books. Other write requests must send `X-Bookkeeper-Workspace` with the
 - `POST /api/duplicates/resolve` — `transactionId`, `canonicalId`,
   `decision` (`duplicate` or `distinct`)
 - `GET /api/export.xlsx`, `/api/export.csv` — optional `businessId`, `year`.
-  XLSX includes the full reusable profile by default (`portable=1`); use
-  `portable=0` for a report without profile data. CSV contains report rows only.
+  XLSX defaults to the accountant summary (`view=summary`), without profile data.
+  Legacy detailed exports use `view=ledger`; explicitly add `portable=1` to embed
+  a reusable profile. Summary exports reject embedded profiles. CSV contains report rows only.
 - `GET /api/backup`
 - `POST /api/categorization/preview` and `/api/categorization/apply` — selected
   `ids`, category/business, review/inclusion choices; apply requires the returned
