@@ -618,7 +618,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == '/api/export.pdf':
             return self.export_pdf()
         if path in {'/','/index.html'}:return self.serve_interface()
-        if path in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/rule_library.js','/automation.css','/profile_ui.js','/safeguards.js'}:
+        if path in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/rule_library.js','/automation.css','/profile_ui.js','/safeguards.js','/import_queue.js'}:
             return super().do_GET()
         return self.send_error(404)
 
@@ -640,7 +640,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_HEAD(self):
         # SimpleHTTPRequestHandler otherwise allows HEAD to bypass GET's allowlist.
         if self.local_request() and unquote(urlparse(self.path).path) in {'/','/index.html'}:return self.serve_interface(head=True)
-        if self.local_request() and unquote(urlparse(self.path).path) in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/rule_library.js','/automation.css','/profile_ui.js','/safeguards.js'}:
+        if self.local_request() and unquote(urlparse(self.path).path) in {'/app.js', '/styles.css', '/categorize.js', '/categorize.css','/setup.js','/setup.css','/source.js','/source.css','/credits.js','/credits.css','/batch_selection.js','/automation.js','/suggested_batches.js','/rule_library.js','/automation.css','/profile_ui.js','/safeguards.js','/import_queue.js'}:
             return super().do_HEAD()
         return self.send_error(404)
 
@@ -828,8 +828,9 @@ class Handler(SimpleHTTPRequestHandler):
                 token = secrets.token_urlsafe(24)
                 with connect() as db:
                     db.execute('DELETE FROM staged_imports WHERE created_at<?', (dt.datetime.now().timestamp() - 1800,))
-                    if db.execute('SELECT count(*) FROM staged_imports').fetchone()[0] >= 10:
-                        raise ValueError('Finish or wait for existing import previews to expire before adding more files.')
+                    count,size=db.execute('SELECT count(*),coalesce(sum(length(content)),0) FROM staged_imports').fetchone()
+                    if count >= 50 or size+len(content)>200*1024*1024:
+                        raise ValueError('Finish or cancel existing import previews before adding more files (50 previews / 200 MB maximum).')
                     db.execute('INSERT INTO staged_imports VALUES(?,?,?,?,?)', (token, content, json.dumps(parsed), file_hash, dt.datetime.now().timestamp()))
                 debits = sum(r["amount_cents"] for r in parsed["rows"] if r["direction"] == "debit")
                 credit_total = sum(r["amount_cents"] for r in parsed["rows"] if r["direction"] == "credit")
@@ -841,6 +842,16 @@ class Handler(SimpleHTTPRequestHandler):
                     'extraction':parsed['extraction'],'rememberedLayouts':profiles,
                     'sourceCategoryGroups': source_archive.category_groups(parsed),
                     "rows": [{"date":r["date"],"description":r["description"],"amountCents":r["amount_cents"],"sourceAmountCents":r["source_amount_cents"],"direction":r["direction"],"sourceRow":r["source_row"],'sourcePage':r.get('source_page'),'evidence':r['raw']['evidence'],'kind':r['transaction_kind']} for r in parsed["rows"][:20]]})
+            if path == '/api/imports/discard':
+                body=self.read_json()
+                tokens=body.get('tokens')
+                if not isinstance(tokens,list) or len(tokens)>50 or any(not isinstance(t,str) for t in tokens):
+                    raise ValueError('Choose up to 50 preview tokens to discard.')
+                with connect() as db:
+                    db.executemany('DELETE FROM staged_imports WHERE token=?',[(t,) for t in tokens])
+                return self.send_json(200,{'ok':True})
+            if path == '/api/imports/commit-batch':
+                return self.commit_import_batch()
             if path == "/api/imports/commit":
                 return self.commit_import()
             if path == '/api/review/undo':
@@ -885,27 +896,74 @@ class Handler(SimpleHTTPRequestHandler):
                 'categoryReason':category_reason,'categoryDecidedAt':history['changed_at'] if history else None,'suggestion':value}
         return self.send_json(200,result)
 
+    def commit_import_batch(self):
+        items=self.read_json().get('items')
+        if not isinstance(items,list) or not 1<=len(items)<=25 or any(not isinstance(item,dict) or not isinstance(item.get('token'),str) or not item['token'] for item in items):
+            raise ValueError('Choose between 1 and 25 confirmed statement previews.')
+        if len({item['token'] for item in items})!=len(items):
+            raise ValueError('Each statement preview can appear only once in a batch.')
+        fields=('accountId','confirmExtraction','confirmMapping','rememberLayout','allowDuplicate')
+        settings=[{key:item.get(key,False if key!='accountId' else None) for key in fields} for item in items]
+        if any(value!=settings[0] for value in settings[1:]):
+            raise ValueError('Every statement in a batch must use the same source account and import settings.')
+        if any(type(settings[0][key]) is not bool for key in fields if key!='accountId'):
+            raise ValueError('Batch import settings must be true or false.')
+        # Check every detected account before saving the first new statement.
+        with connect() as db:
+            pdf_accounts=set()
+            for item in items:
+                staged=db.execute('SELECT parsed_json FROM staged_imports WHERE token=?',(item['token'],)).fetchone()
+                if staged:
+                    parsed=json.loads(staged['parsed_json'])
+                    self.validate_import_account(db,parsed,item.get('accountId'))
+                    if parsed['format']=='pdf':pdf_accounts.add(parsed['extraction']['accountLastFour'])
+            if len(pdf_accounts)>1:
+                raise ValueError('The PDFs identify different source accounts. Choose statements for one account per batch.')
+        imported=[]
+        for index,item in enumerate(items):
+            try:
+                imported.append(self.save_import(item,retryable=True))
+            except (ValueError,OSError,sqlite3.Error) as exc:
+                # Earlier statements stay saved; the client can retry without
+                # re-importing tokens whose results were lost in a disconnect.
+                return self.send_json(200,{'imported':imported,'failedIndex':index,'error':str(exc)})
+        return self.send_json(201,{'imported':imported,'failedIndex':None})
+
     def commit_import(self):
-        body = self.read_json()
+        return self.send_json(201,self.save_import(self.read_json()))
+
+    def validate_import_account(self, db, parsed, account_id):
+        selected=db.execute('SELECT id,last_four,account_type FROM accounts WHERE id=? AND active=1',(account_id,)).fetchone()
+        if not selected:raise ValueError('Choose a valid source account.')
+        if parsed['format']=='pdf':
+            if selected['account_type']=='credit':
+                raise ValueError('This PDF is a checking statement. Choose a checking source account, not a credit card.')
+            if selected['last_four'] and selected['last_four']!=parsed['extraction']['accountLastFour']:
+                raise ValueError('The selected source account does not match the PDF account ending '+parsed['extraction']['accountLastFour']+'. Choose or create the correct source account.')
+
+    def save_import(self, body, retryable=False):
         with connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            request_hash=hashlib.sha256(json.dumps(body,sort_keys=True).encode()).hexdigest()
+            if retryable:
+                prior=db.execute("SELECT id,metadata_json FROM documents WHERE json_extract(metadata_json,'$.batchToken')=?",(body.get('token'),)).fetchone()
+                if prior:
+                    metadata=json.loads(prior['metadata_json'])
+                    if metadata.get('batchRequestHash')!=request_hash:
+                        raise ValueError('This batch statement was already imported with different settings. Refresh the imported statements list before continuing.')
+                    inserted=metadata['batchInserted']
+                    return {'documentId':prior['id'],'rowCount':len(inserted),'inserted':inserted,'automation':metadata.get('automation')}
+
             staged = db.execute('SELECT * FROM staged_imports WHERE token=? AND created_at>?', (body.get('token'), dt.datetime.now().timestamp() - 1800)).fetchone()
             if not staged:
-                return self.send_json(404, {'error': 'Import preview expired or was already committed. Choose the file again.'})
+                raise ValueError('Import preview expired or was already committed. Reload this statement preview.')
             parsed = json.loads(staged['parsed_json'])
             if 'extraction' not in parsed:
                 raise ValueError('This preview predates the import explanation update. Choose the file again to review its columns.')
             if body.get('confirmExtraction') is not True:
                 raise ValueError('Confirm the source columns, selected rows and amount interpretation before importing.')
             account_id = body.get('accountId')
-            if not db.execute('SELECT id FROM accounts WHERE id=? AND active=1', (account_id,)).fetchone():
-                raise ValueError('Choose a valid source account.')
-            if parsed['format']=='pdf':
-                selected=db.execute('SELECT last_four,account_type FROM accounts WHERE id=?',(account_id,)).fetchone()
-                if selected['account_type']=='credit':
-                    raise ValueError('This PDF is a checking statement. Choose a checking source account, not a credit card.')
-                if selected['last_four'] and selected['last_four']!=parsed['extraction']['accountLastFour']:
-                    raise ValueError('The selected source account does not match the PDF account ending '+parsed['extraction']['accountLastFour']+'. Choose or create the correct source account.')
+            self.validate_import_account(db,parsed,account_id)
             if parsed['provider'] == 'American Express' and body.get('confirmMapping') is not True:
                 raise ValueError('Confirm the American Express mapping: positive amounts are charges; negative amounts are payments or credits.')
             if parsed['format']=='pdf' and body.get('confirmMapping') is not True:
@@ -924,6 +982,7 @@ class Handler(SimpleHTTPRequestHandler):
                     output.write(staged['content']); output.flush(); os.fsync(output.fileno())
                 temporary.replace(target)
                 metadata = {'reconciliation':parsed['reconciliation'],'rowCount':len(parsed['rows']),'mappingConfirmed':body.get('confirmMapping') is True,'extractionConfirmed':True,'extraction':parsed['extraction']}
+                if retryable: metadata.update(batchToken=body['token'],batchRequestHash=request_hash)
                 dates = [r['date'] for r in parsed['rows'] if parse_date(r['date'])]
                 db.execute('INSERT INTO documents(id,filename,file_hash,stored_path,provider,format,statement_start,statement_end,imported_at,default_classification,parser_version,metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
                     (document_id, parsed['filename'], staged['file_hash'], target.relative_to(DATA_DIR).as_posix(), parsed['provider'], parsed['format'], parsed['extraction'].get('statementStart') or (min(dates) if dates else None), parsed['extraction'].get('statementEnd') or (max(dates) if dates else None), now, 'unknown', parsed['parser_version'], json.dumps(metadata)))
@@ -942,6 +1001,7 @@ class Handler(SimpleHTTPRequestHandler):
                     inserted.append({'id':tx_id, 'duplicateCandidate':possible['id'] if possible else None})
                 automatic = automation.apply(db,self,now,ids=[r['id'] for r in inserted])
                 metadata['automation'] = automatic
+                if retryable: metadata['batchInserted']=inserted
                 db.execute('UPDATE documents SET metadata_json=? WHERE id=?',(json.dumps(metadata),document_id))
                 db.execute('DELETE FROM staged_imports WHERE token=?', (body['token'],))
                 if body.get('rememberLayout') is True:
@@ -953,7 +1013,7 @@ class Handler(SimpleHTTPRequestHandler):
                 temporary.unlink(missing_ok=True)
                 target.unlink(missing_ok=True)
                 raise
-        return self.send_json(201, {'documentId':document_id, 'rowCount':len(inserted), 'inserted':inserted,'automation':automatic})
+        return {'documentId':document_id, 'rowCount':len(inserted), 'inserted':inserted,'automation':automatic}
 
     def undo_review(self):
         body = self.read_json()

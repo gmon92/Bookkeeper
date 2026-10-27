@@ -19,6 +19,7 @@
 !rule_library.py
 !index.html
 !app.js
+!import_queue.js
 !profile_ui.js
 !setup.js
 !batch_selection.js

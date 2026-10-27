@@ -82,6 +82,8 @@ function protectedActionDescription(path,options={}){
     ruleSafeguardScope(body)+'\n\n'+ruleSafeguardEffect(body.ruleMode||'suggest',body.ruleMode==='review'&&!!body.includeInTotals));
   if(route==='/api/import-profiles/revoke')return result('Revoke this saved import layout?',
     'Future statements with this layout will need their columns and amount interpretation confirmed again. Existing imported statements, saved transaction decisions and automation rules stay unchanged.');
+  if(route==='/api/imports/commit-batch')return result('Import '+(body.items?.length||0)+' confirmed statements?',
+    'Imports every statement to the same source account with the shared extraction, duplicate and saved-layout settings shown in the batch preview. '+enabled.length+' enabled rules will be checked against each transaction’s account and conditions. Only explicitly trusted rules can review or include expenses automatically. Each original file stays attached to its own transactions. If a later statement fails, completed statements stay saved and are skipped safely on retry.');
   if(route==='/api/imports/commit'&&(enabled.length||body.rememberLayout))return result('Import this statement using this profile’s saved automation?',
     'Adds the previewed transactions and retains the original file. '+enabled.length+' enabled rules may categorize future matches; trusted rules may mark eligible rows reviewed or include expenses/refunds in totals. The rule definitions themselves are unchanged.'+
     (body.rememberLayout?' The confirmed column layout is also saved in this profile for future imports.':'')+' Automatic decisions can be undone after importing.');

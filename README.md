@@ -256,6 +256,21 @@ and `category`. File import supports up to 1,000 rules and browser uploads up to
 
 ## Import → review → report
 
+Choose **Single file** or **Batch upload** when importing. Batch upload accepts
+up to 25 statements, 20 MB per file, and 100 MB total. Select one source account
+and shared settings for the entire batch: remember layouts, group by statement
+category, and explicitly permit duplicate documents if needed. Use the statement
+picker to inspect each preview, confirm the shared settings once, then import
+all files together. CSV, XLSX, and supported Chase checking PDFs can be mixed.
+A PDF identifying a different account stops the batch before any new file saves.
+Remove unsupported files to continue with the others. Canceling releases unused
+previews and leaves saved originals alone. Each new batch starts with a blank
+account and fresh layout, duplicate and confirmation choices.
+
+Each statement saves independently. If a later statement fails, completed files
+stay imported; retrying the batch does not add them again. Reload an expired
+preview and confirm it again before retrying. Previews expire after 30 minutes.
+
 1. Add a source account using a nickname and optional last four digits. An
    account's business owner organizes accounts; each transaction's business
    assignment determines which books contain it.

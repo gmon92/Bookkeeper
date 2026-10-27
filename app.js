@@ -154,8 +154,8 @@ function updateBatchBar() {
 
 function renderImports() {
   const docs = scopedDocuments();
-  return heading('Bring the paperwork together.', 'Import a statement once. Keep the original and every extracted row within reach.', button('Choose a file','import','primary','plus'), 'YOUR SOURCE LIBRARY') +
-    '<section class="upload-zone" id="dropzone" role="button" tabindex="0" aria-label="Choose a CSV, Excel or supported PDF statement to import"><span class="upload-corner">A PLACE FOR THE ORIGINALS</span><div><div class="empty-graphic">' + icon('import') + '</div><h2>Drop your statement here.</h2><p>Or choose a file from your computer. We’ll preview it together.</p><span class="button button-secondary">' + icon('folder') + 'Choose a CSV, Excel or PDF file</span><small>CSV, XLSX & Chase checking PDF statements · up to 20 MB · processed on this device</small></div></section><div class="section-title-row"><h2>Imported statements</h2><small>' + docs.length + ' original' + (docs.length===1?'':'s') + ' retained</small></div><section class="panel">' + (docs.length ? '<div class="table-wrap"><table><thead><tr><th>Source document</th><th>Imported</th><th>Transactions</th><th>Source account</th><th></th></tr></thead><tbody>' + docs.map(d => { const rows = state.transactions.filter(t=>t.documentId===d.id), accountIds=[...new Set(rows.map(t=>t.account))]; return '<tr><td><div class="file-label"><span class="file-badge">' + e(d.format.toUpperCase()) + '</span><span><strong>' + e(d.filename) + '</strong><small>Original retained · ' + e(d.file_hash?.slice(0,12)) + '</small></span></div></td><td class="cell-date">' + e(formatDate(d.imported_at)) + '</td><td>' + rows.length + '<span class="cell-secondary">' + rows.filter(isReview).length + ' awaiting review</span></td><td class="cell-account">' + e(accountIds.join(', ') || '—') + '</td><td><button class="text-button" data-source-archive="'+e(d.id)+'">Original data</button>' + (d.metadata?.automation?'<br><button class="text-button" data-import-results="'+e(d.id)+'">Automation results</button>':'') + '<br><button class="text-button" data-document="' + e(d.id) + '">View rows ' + icon('arrow-right') + '</button></td></tr>'; }).join('') + '</tbody></table></div>' : emptyState('folder','A library starts with one document.','Your imported originals will live here, linked to the transactions they contain.','','compact')) + '</section><div class="info-strip">' + icon('shield') + '<p><strong>Evidence, always attached.</strong> Original statements stay on your computer. Enabled rules run on new imports. Only explicitly trusted rules can approve or include expenses automatically.</p></div>';
+  return heading('Bring the paperwork together.', 'Import a statement once. Keep the original and every extracted row within reach.', button('Upload statements','import','primary','plus'), 'YOUR SOURCE LIBRARY') +
+    '<section class="upload-zone" id="dropzone" role="button" tabindex="0" aria-label="Choose CSV, Excel or supported PDF statements to import"><span class="upload-corner">A PLACE FOR THE ORIGINALS</span><div><div class="empty-graphic">' + icon('import') + '</div><h2>Drop your statements here.</h2><p>Or choose several files from your computer. Choose one account and shared settings for the whole batch, preview the statements, then import together.</p><span class="button button-secondary">' + icon('folder') + 'Choose CSV, Excel or PDF files</span><small>Up to 25 statements · 20 MB per file · 100 MB per batch · processed on this device</small></div></section><div class="section-title-row"><h2>Imported statements</h2><small>' + docs.length + ' original' + (docs.length===1?'':'s') + ' retained</small></div><section class="panel">' + (docs.length ? '<div class="table-wrap"><table><thead><tr><th>Source document</th><th>Imported</th><th>Transactions</th><th>Source account</th><th></th></tr></thead><tbody>' + docs.map(d => { const rows = state.transactions.filter(t=>t.documentId===d.id), accountIds=[...new Set(rows.map(t=>t.account))]; return '<tr><td><div class="file-label"><span class="file-badge">' + e(d.format.toUpperCase()) + '</span><span><strong>' + e(d.filename) + '</strong><small>Original retained · ' + e(d.file_hash?.slice(0,12)) + '</small></span></div></td><td class="cell-date">' + e(formatDate(d.imported_at)) + '</td><td>' + rows.length + '<span class="cell-secondary">' + rows.filter(isReview).length + ' awaiting review</span></td><td class="cell-account">' + e(accountIds.join(', ') || '—') + '</td><td><button class="text-button" data-source-archive="'+e(d.id)+'">Original data</button>' + (d.metadata?.automation?'<br><button class="text-button" data-import-results="'+e(d.id)+'">Automation results</button>':'') + '<br><button class="text-button" data-document="' + e(d.id) + '">View rows ' + icon('arrow-right') + '</button></td></tr>'; }).join('') + '</tbody></table></div>' : emptyState('folder','A library starts with one document.','Your imported originals will live here, linked to the transactions they contain.','','compact')) + '</section><div class="info-strip">' + icon('shield') + '<p><strong>Evidence, always attached.</strong> Original statements stay on your computer. Enabled rules run on new imports. Only explicitly trusted rules can approve or include expenses automatically.</p></div>';
 }
 function renderAccounts() {
   const accounts = scopedAccounts();
@@ -239,7 +239,7 @@ function toast(message) { $('#toast-message').textContent=message;$('#toast').hi
 async function api(path,options={}) {
   if(location.protocol==='file:') throw new Error('Open the app at http://127.0.0.1:8765 to use your database.');
   if(!confirmProtectedAction(path,options))throw Object.assign(new Error('Cancelled. This action was not applied.'),{cancelled:true});
-  const response=await fetch(path,{signal:AbortSignal.timeout(10000),...options,headers:{'Content-Type':'application/json',...(state.health?.workspaceId?{'X-Bookkeeper-Workspace':state.health.workspaceId}:{}),...(options.headers||{})}});
+  const response=await fetch(path,{signal:AbortSignal.timeout(path==='/api/imports/commit-batch'?120000:10000),...options,headers:{'Content-Type':'application/json',...(state.health?.workspaceId?{'X-Bookkeeper-Workspace':state.health.workspaceId}:{}),...(options.headers||{})}});
   const contentType=response.headers.get('content-type')||'';
   if(!contentType.includes('application/json')) throw new Error('The local app server is not responding.');
   const payload=await response.json();if(!response.ok)throw new Error(payload.error||'The request could not be completed.');return payload;
@@ -331,7 +331,7 @@ function openImportPreview() {
   const warnings=[];
   if(p.reconciliation?.matched)warnings.push(p.provider==='Chase checking'?'PDF deposits, withdrawals and every running balance reconcile with the statement summary.':'Statement totals match the workbook summary.');
   if(p.requiresMappingConfirmation)warnings.push(p.provider==='Chase checking'?'Chase checking PDF detected. Negative amounts are withdrawals; positive amounts are deposits. Select the source account ending '+e(p.extraction.accountLastFour)+'. Deposits and card payments retain their own review decisions.':'American Express layout detected. Confirm the amount mapping below. Negative merchant credits still require review.');
-  if(p.alreadyImported)warnings.push('<strong>This exact file is already in your library.</strong> Importing again will add another set of rows for duplicate review.');
+  if(p.alreadyImported)warnings.push((p.duplicateInBatch?'<strong>This exact file also appears earlier in this batch.</strong>':'<strong>This exact file is already in your library.</strong>')+' Importing again will add another set of rows for duplicate review.');
   if(p.warnings.total)warnings.push(e(p.warnings.total)+' parsing warning'+(p.warnings.total===1?'':'s')+'. Check dates, amounts, and descriptions before including these rows in totals.');
   if(p.possibleDuplicates)warnings.push(e(p.possibleDuplicates)+' rows may match existing activity.');
   $('#import-warning').innerHTML=warnings.map(text=>'<div class="callout">'+icon('warning')+'<p>'+text+'</p></div>').join('')+importExplanationMarkup(p);
@@ -435,13 +435,14 @@ document.addEventListener('click',event=>{
   }
   const rulesFile=event.target.closest('[data-report-rules-file]');if(rulesFile){handleReportRulesFile(rulesFile);return;}
   if(document.body.classList.contains('nav-open')&&!event.target.closest('.sidebar,#menu-button')){document.body.classList.remove('nav-open');$('#menu-button').setAttribute('aria-expanded','false');}
-  const close=event.target.closest('[data-close]');if(close){$('#'+close.dataset.close).close();return;}
+  const close=event.target.closest('[data-close]');if(close){if(close.dataset.close==='import-dialog'&&statementBatch?.committing)return;$('#'+close.dataset.close).close();return;}
   const edit=event.target.closest('[data-edit]');if(edit&&!event.target.closest('input')){event.preventDefault();openEditor(edit.dataset.edit);return;}
   const batch=event.target.closest('[data-batch]');if(batch){openBatch(batch.dataset.batch);return;}
   const doc=event.target.closest('[data-document]');if(doc){triage.resultIds=null;state.document=doc.dataset.document;state.query='';state.account='';state.tab='all';state.year='all';navigate('transactions');return;}
   const tab=event.target.closest('[data-tab]');if(tab){state.tab=tab.dataset.tab;state.selected.clear();render();return;}
   const action=event.target.closest('[data-action]')?.dataset.action;
-  if(action==='import'){if(requireConnection())$('#file-input').click();}
+  if(action==='import')openStatementImportMode();
+  else if(action==='import-single'||action==='import-batch'){if(requireConnection()){$('#import-mode-dialog').close();$(action==='import-batch'?'#batch-file-input':'#file-input').click();}}
   else if(action==='add-account')openAccount();
   else if(action==='add-business')openBusiness();
   else if(action==='review')navigate('review');
@@ -454,7 +455,7 @@ document.addEventListener('click',event=>{
   else if(action==='backup'){if(!confirmProtectedAction('/api/backup'))return;const a=document.createElement('a');a.href='/api/backup';a.download='bookkeeper-backup.zip';a.click();}
   else if(action==='export-database'){if(requireConnection()&&confirmProtectedAction('/api/export.sqlite3')){const anchor=document.createElement('a');anchor.href='/api/export.sqlite3';anchor.download='bookkeeper-database.sqlite3';anchor.click();}}
   else if(action==='export')openReportExport();
-  const zone=event.target.closest('#dropzone');if(zone&&!action&&requireConnection())$('#file-input').click();
+  const zone=event.target.closest('#dropzone');if(zone&&!action)openStatementImportMode();
 });
 document.addEventListener('change',event=>{
   const target=event.target;
@@ -470,14 +471,16 @@ $('#report-export-form').addEventListener('submit',event=>{event.preventDefault(
 $('#transaction-form').addEventListener('change',event=>{if(event.target.name==='businessId')setCategories(event.target.value,$('#edit-category').value);if(event.target.name==='accountId'){const all=$('#edit-rule-account').value==='*',account=state.accounts.find(a=>a.id===event.target.value);$('#edit-rule-account').innerHTML=quickOptions([[account.id,'Account only: '+accountName(account)],['*','Universal · all current and future accounts']],all?'*':account.id);}syncEditor();});
 $('#account-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget;busy(form,true);
-  try{const data=Object.fromEntries(new FormData(form));data.businessId=data.businessId||null;const saved=await post('/api/accounts',data);await loadData({quiet:true});form.reset();$('#account-dialog').close();if($('#import-dialog').open){$('#import-account').innerHTML=accountOptions(saved.id);}toast('Source account added.');}catch(error){showError(form,error);}finally{busy(form,false);}
+  try{const data=Object.fromEntries(new FormData(form));data.businessId=data.businessId||null;const saved=await post('/api/accounts',data);await loadData({quiet:true});form.reset();$('#account-dialog').close();if($('#import-dialog').open){$('#import-account').innerHTML=accountOptions(saved.id);$('#import-account').dispatchEvent(new Event('change',{bubbles:true}));if(statementBatch){$('#batch-import-account').innerHTML=accountOptions(saved.id);$('#batch-import-account').dispatchEvent(new Event('change',{bubbles:true}));}}toast('Source account added.');}catch(error){showError(form,error);}finally{busy(form,false);}
 });
 $('#business-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget;busy(form,true);
   try{const saved=await post('/api/businesses',Object.fromEntries(new FormData(form)));state.workspace=saved.id;state.document='';state.account='';state.query='';state.selected.clear();await saveProfilePreferences({workspace:state.workspace});await loadData({quiet:true});$('#business-dialog').close();form.reset();toast('Business workspace created.');}catch(error){showError(form,error);}finally{busy(form,false);}
 });
 $('#import-form').addEventListener('submit',async event=>{
-  event.preventDefault();const form=event.currentTarget;if(!state.preview)return;busy(form,true);
+  event.preventDefault();const form=event.currentTarget;
+  if(statementBatch){try{await submitStatementBatch(form);}catch(error){showError(form,error);}return;}
+  if(!state.preview)return;busy(form,true);
   try{const sourceBatch=$('#import-source-batch')?.checked||false;if($('#import-source-batch')&&await saveProfilePreferences({groupImportsBySourceCategory:sourceBatch})===false)return;const saved=await post('/api/imports/commit',{token:state.preview.token,accountId:$('#import-account').value,confirmMapping:$('#mapping-confirm').checked,confirmExtraction:$('#mapping-confirm').checked,rememberLayout:$('#remember-import-layout').checked,allowDuplicate:$('#duplicate-confirm').checked});state.preview=null;$('#import-dialog').close();await loadData({quiet:true});state.workspace='all';saveProfilePreferences({workspace:'all',year:'all'});$('#workspace-select').value='all';state.year='all';state.document=saved.documentId;state.query='';state.account='';state.selected.clear();Object.assign(triage,{sourceCategory:'',category:'',classification:'',direction:'',from:'',to:'',min:'',max:'',focus:'all',merchant:'',sourceGroup:null,view:sourceBatch?'groups':'rows',grouping:sourceBatch?'sourceCategory':'merchant',resultIds:null});navigate('review');showAutomationSummary(saved.documentId,saved.automation);toast(saved.rowCount+' transactions imported'+(sourceBatch?' into statement category groups.':' for review.'));}catch(error){showError(form,error);}finally{busy(form,false);}
 });
 $('#transaction-form').addEventListener('submit',async event=>{
@@ -497,11 +500,12 @@ $('#batch-form').addEventListener('submit',async event=>{
   event.preventDefault();const form=event.currentTarget;busy(form,true);
   try{if(state.batchWorkspaceId!==state.health?.workspaceId)throw new Error('The active profile changed. Reopen this confirmation before saving.');await post('/api/review/batch',{ids:state.batchIds,action:state.batchAction,businessId:$('#batch-business')?.value});state.selected.clear();$('#batch-dialog').close();await loadData({quiet:true});toast('Your review changes were saved.');}catch(error){showError(form,error);}finally{busy(form,false);}
 });
-$('#file-input').addEventListener('change',event=>{readStatement(event.target.files[0]);event.target.value='';});
+$('#file-input').addEventListener('change',event=>{readStatements(event.target.files);event.target.value='';});
+$('#batch-file-input').addEventListener('change',event=>{readStatements(event.target.files,{batch:true});event.target.value='';});
 document.addEventListener('dragover',event=>{const zone=event.target.closest('#dropzone');if(zone){event.preventDefault();zone.classList.add('drag-over');}});
 document.addEventListener('dragleave',event=>{const zone=event.target.closest('#dropzone');if(zone&&!zone.contains(event.relatedTarget))zone.classList.remove('drag-over');});
-document.addEventListener('drop',event=>{const zone=event.target.closest('#dropzone');if(zone){event.preventDefault();zone.classList.remove('drag-over');readStatement(event.dataTransfer.files[0]);}});
-document.addEventListener('keydown',event=>{if(event.target.id==='dropzone'&&['Enter',' '].includes(event.key)){event.preventDefault();if(requireConnection())$('#file-input').click();}if(event.key==='Escape'){document.body.classList.remove('nav-open');$('#menu-button').setAttribute('aria-expanded','false');}});
+document.addEventListener('drop',event=>{const zone=event.target.closest('#dropzone');if(zone){event.preventDefault();zone.classList.remove('drag-over');readStatements(event.dataTransfer.files);}});
+document.addEventListener('keydown',event=>{if(event.target.id==='dropzone'&&['Enter',' '].includes(event.key)){event.preventDefault();openStatementImportMode();}if(event.key==='Escape'){document.body.classList.remove('nav-open');$('#menu-button').setAttribute('aria-expanded','false');}});
 $('#refresh-button').addEventListener('click',()=>loadData());
 $('#menu-button').addEventListener('click',event=>{event.stopPropagation();const open=document.body.classList.toggle('nav-open');$('#menu-button').setAttribute('aria-expanded',String(open));});
 $('.content-shell').addEventListener('click',event=>{if(document.body.classList.contains('nav-open')&&!event.target.closest('#menu-button')){document.body.classList.remove('nav-open');$('#menu-button').setAttribute('aria-expanded','false');}});

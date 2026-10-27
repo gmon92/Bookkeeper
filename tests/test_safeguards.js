@@ -276,6 +276,17 @@ test('statement uploader accepts a PDF and opens its server preview',async()=>{
   assert.equal(env.context.state.loadingFile,false);
 });
 
+test('batch import confirmation covers shared choices and cancellation prevents the request',async()=>{
+  const env=environment(false);
+  const body={items:[{token:'first',accountId:'card',confirmExtraction:true},{token:'second',accountId:'bank',confirmExtraction:true}]};
+  const description=env.context.protectedActionDescription('/api/imports/commit-batch',options(body));
+  assert.match(description.title,/2 confirmed statements/);
+  assert.match(description.details,/same source account.*shared extraction/);
+  assert.match(description.details,/skipped safely on retry/);
+  await assert.rejects(env.context.post('/api/imports/commit-batch',body),/Cancelled/);
+  assert.equal(env.requests.length,0);
+});
+
 test('PDF extraction evidence identifies pages instead of a CSV table',()=>{
   const env=environment();env.context.e=value=>String(value??'');
   const setup=fs.readFileSync(path.join(root,'setup.js'),'utf8');

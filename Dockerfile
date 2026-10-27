@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY server.py workspace_store.py statement_import.py pdf_import.py reports.py backup.py \
     categorization.py credits.py source_archive.py import_evidence.py automation.py consistency.py review_batches.py rule_library.py ./
 COPY index.html app.js profile_ui.js setup.js batch_selection.js categorize.js \
-    source.js credits.js automation.js suggested_batches.js rule_library.js safeguards.js ./
+    source.js credits.js automation.js suggested_batches.js rule_library.js safeguards.js import_queue.js ./
 COPY styles.css setup.css categorize.css source.css credits.css automation.css ./
 
 USER bookkeeper
