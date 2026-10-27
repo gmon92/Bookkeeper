@@ -107,8 +107,11 @@ def parse_statement(content, filename, csv_parser):
     suffix = Path(filename).suffix.lower()
     if suffix == '.xlsx':
         return parse_xlsx(content, filename, csv_parser)
+    if suffix == '.pdf':
+        from pdf_import import parse_pdf
+        return parse_pdf(content,filename,csv_parser)
     if suffix == '.csv':
         parsed = csv_parser(content, filename)
         parsed.update(format='csv', provider='Generic CSV', parser_version='csv-v4', reconciliation=None)
         return finish(parsed)
-    raise ValueError("Choose a CSV or XLSX statement. PDF and legacy XLS files are not supported yet.")
+    raise ValueError("Choose a CSV, XLSX or supported text-based Chase checking PDF statement. Legacy XLS files are not supported.")

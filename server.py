@@ -458,7 +458,7 @@ def transaction_json(row: sqlite3.Row) -> dict:
         "id": row["id"], "documentId": row["document_id"], "businessId": row["business_id"],
         "accountId": row["account_id"], "account": row["account_nickname"] + (f" ···· {row['last_four']}" if row["last_four"] else ""),
         "date": row["date"], "postedDate": row["posted_date"], "merchant": row["merchant"] or row["description"],
-        "detail": (row["source_filename"] or "Manual entry") + (f" · row {row['source_row']}" if row["source_row"] else ""),
+        "detail": (row["source_filename"] or "Manual entry") + (f" · page {row['source_page']}" if row['source_page'] else '') + (f" · row {row['source_row']}" if row["source_row"] else ""),
         "description": row["description"], "rawAmountText": row["raw_amount_text"],
         "sourceAmountCents": row["source_amount_cents"], "amountCents": row["amount_cents"],
         "direction": row["direction"], "kind": row["transaction_kind"], "classification": row["classification"],
@@ -466,7 +466,7 @@ def transaction_json(row: sqlite3.Row) -> dict:
         "excluded": bool(row['excluded']),
         "creditTreatment": row['credit_treatment'], "relatedTransactionId": row['related_transaction_id'],
         "duplicateOf": row["duplicate_of"], "duplicateCandidate": row["duplicate_candidate"],
-        "sourceRow": row["source_row"], "sourceFilename": row["source_filename"],
+        "sourceRow": row["source_row"], "sourcePage": row['source_page'], "sourceFilename": row["source_filename"],
         "sourceSheet": raw.get('sheet'),
         "sourceCategory": row['original_source_category'] if 'original_source_category' in row.keys() and row['original_source_category'] is not None else source_archive.category(raw),
         "notes": row["notes"], "fingerprint": row["source_fingerprint"],
@@ -837,10 +837,10 @@ class Handler(SimpleHTTPRequestHandler):
                     "alreadyImported": bool(existing), "possibleDuplicates": duplicate_count,
                     "rowCount": len(parsed["rows"]), "debitCents": debits, "creditCents": credit_total,
                     "headers": parsed["headers"], "warnings": parsed["warnings"],
-                    "provider": parsed['provider'], "reconciliation": parsed['reconciliation'], "requiresMappingConfirmation": parsed['provider'] == 'American Express',
+                    "provider": parsed['provider'], "reconciliation": parsed['reconciliation'], "requiresMappingConfirmation": parsed['provider'] == 'American Express' or parsed['format']=='pdf',
                     'extraction':parsed['extraction'],'rememberedLayouts':profiles,
                     'sourceCategoryGroups': source_archive.category_groups(parsed),
-                    "rows": [{"date":r["date"],"description":r["description"],"amountCents":r["amount_cents"],"sourceAmountCents":r["source_amount_cents"],"direction":r["direction"],"sourceRow":r["source_row"],'evidence':r['raw']['evidence'],'kind':r['transaction_kind']} for r in parsed["rows"][:20]]})
+                    "rows": [{"date":r["date"],"description":r["description"],"amountCents":r["amount_cents"],"sourceAmountCents":r["source_amount_cents"],"direction":r["direction"],"sourceRow":r["source_row"],'sourcePage':r.get('source_page'),'evidence':r['raw']['evidence'],'kind':r['transaction_kind']} for r in parsed["rows"][:20]]})
             if path == "/api/imports/commit":
                 return self.commit_import()
             if path == '/api/review/undo':
@@ -900,8 +900,16 @@ class Handler(SimpleHTTPRequestHandler):
             account_id = body.get('accountId')
             if not db.execute('SELECT id FROM accounts WHERE id=? AND active=1', (account_id,)).fetchone():
                 raise ValueError('Choose a valid source account.')
+            if parsed['format']=='pdf':
+                selected=db.execute('SELECT last_four,account_type FROM accounts WHERE id=?',(account_id,)).fetchone()
+                if selected['account_type']=='credit':
+                    raise ValueError('This PDF is a checking statement. Choose a checking source account, not a credit card.')
+                if selected['last_four'] and selected['last_four']!=parsed['extraction']['accountLastFour']:
+                    raise ValueError('The selected source account does not match the PDF account ending '+parsed['extraction']['accountLastFour']+'. Choose or create the correct source account.')
             if parsed['provider'] == 'American Express' and body.get('confirmMapping') is not True:
                 raise ValueError('Confirm the American Express mapping: positive amounts are charges; negative amounts are payments or credits.')
+            if parsed['format']=='pdf' and body.get('confirmMapping') is not True:
+                raise ValueError('Confirm the Chase PDF amount mapping and reconciled statement balances before importing.')
             existing = db.execute('SELECT id FROM documents WHERE file_hash=?', (staged['file_hash'],)).fetchone()
             if existing and body.get('allowDuplicate') is not True:
                 raise ValueError('This exact document is already imported. Explicitly confirm re-import to retain another copy for review.')
@@ -918,15 +926,15 @@ class Handler(SimpleHTTPRequestHandler):
                 metadata = {'reconciliation':parsed['reconciliation'],'rowCount':len(parsed['rows']),'mappingConfirmed':body.get('confirmMapping') is True,'extractionConfirmed':True,'extraction':parsed['extraction']}
                 dates = [r['date'] for r in parsed['rows'] if parse_date(r['date'])]
                 db.execute('INSERT INTO documents(id,filename,file_hash,stored_path,provider,format,statement_start,statement_end,imported_at,default_classification,parser_version,metadata_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-                    (document_id, parsed['filename'], staged['file_hash'], target.relative_to(DATA_DIR).as_posix(), parsed['provider'], parsed['format'], min(dates) if dates else None, max(dates) if dates else None, now, 'unknown', parsed['parser_version'], json.dumps(metadata)))
+                    (document_id, parsed['filename'], staged['file_hash'], target.relative_to(DATA_DIR).as_posix(), parsed['provider'], parsed['format'], parsed['extraction'].get('statementStart') or (min(dates) if dates else None), parsed['extraction'].get('statementEnd') or (max(dates) if dates else None), now, 'unknown', parsed['parser_version'], json.dumps(metadata)))
                 source_archive.save_document(db, document_id, staged['file_hash'], archive, now)
                 inserted = []
                 for tx in parsed['rows']:
                     tx_id = str(uuid.uuid4())
                     possible = db.execute('SELECT id FROM transactions WHERE account_id=? AND source_fingerprint=? LIMIT 1', (account_id, tx['fingerprint'])).fetchone()
-                    db.execute('''INSERT INTO transactions(id,document_id,account_id,date,posted_date,description,merchant,raw_amount_text,source_amount_cents,amount_cents,direction,transaction_kind,source_fingerprint,classification,category_name,status,source_row,source_raw_json,created_at,updated_at)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                        (tx_id,document_id,account_id,tx['date'],tx['posted_date'],tx['description'],tx['merchant'],tx['raw_amount_text'],tx['source_amount_cents'],tx['amount_cents'],tx['direction'],tx['transaction_kind'],tx['fingerprint'],'unknown',tx['category_name'],'needs_review',tx['source_row'],json.dumps(tx['raw']),now,now))
+                    db.execute('''INSERT INTO transactions(id,document_id,account_id,date,posted_date,description,merchant,raw_amount_text,source_amount_cents,amount_cents,direction,transaction_kind,source_fingerprint,classification,category_name,status,source_page,source_row,source_raw_json,created_at,updated_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                        (tx_id,document_id,account_id,tx['date'],tx['posted_date'],tx['description'],tx['merchant'],tx['raw_amount_text'],tx['source_amount_cents'],tx['amount_cents'],tx['direction'],tx['transaction_kind'],tx['fingerprint'],'unknown',tx['category_name'],'needs_review',tx.get('source_page'),tx['source_row'],json.dumps(tx['raw']),now,now))
                     baseline = {'date':tx['date'],'postedDate':tx['posted_date'],'description':tx['description'],
                         'merchant':tx['merchant'],'amountCents':tx['amount_cents'],'direction':tx['direction'],
                         'kind':tx['transaction_kind'],'category':tx['category_name'],'classification':'unknown','includeInTotals':False}

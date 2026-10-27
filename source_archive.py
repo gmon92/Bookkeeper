@@ -117,7 +117,13 @@ def capture(content, filename):
             raise ValueError('Source data exceeds the database archive limit (100,000 rows, 2 million cells or 100 MB). Split the statement before importing.')
         result.append((sheet, number, encoded))
 
-    if Path(filename).suffix.lower() == '.csv':
+    if Path(filename).suffix.lower() == '.pdf':
+        from pdf_import import extract_pages
+        for page in extract_pages(content):
+            sheet='Page '+str(page['number'])
+            for line in page['lines']:add(sheet,line['number'],[{'type':'text','value':line['text']}])
+            sheets.append({'name':sheet,'rows':len(page['lines']),'columns':1,'kind':'pdf_text'})
+    elif Path(filename).suffix.lower() == '.csv':
         try:
             text = content.decode('utf-8-sig')
         except UnicodeDecodeError:

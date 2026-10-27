@@ -6,6 +6,7 @@
 !server.py
 !workspace_store.py
 !statement_import.py
+!pdf_import.py
 !reports.py
 !backup.py
 !categorization.py

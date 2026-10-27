@@ -7,11 +7,14 @@ import datetime as dt
 def finish(parsed):
     extraction = parsed['extraction']
     extraction['provider'] = parsed['provider']
+    extraction['format'] = parsed['format']
     extraction['parserVersion'] = parsed['parser_version']
     extraction['rowCount'] = len(parsed['rows'])
-    extraction['rowSelection'] = 'Read nonempty rows after the detected header. Blank rows are skipped. Invalid amounts or dates are retained for review, not silently discarded.'
+    extraction.setdefault('rowSelection','Read nonempty rows after the detected header. Blank rows are skipped. Invalid amounts or dates are retained for review, not silently discarded.')
     extraction['categoryPolicy'] = 'Statement categories are retained in the database as original evidence and can automatically group transactions into review batches. Each batch can receive one business/category decision. Imports do not approve transactions or include expenses in totals.'
-    if parsed['provider']=='American Express':
+    if parsed['format']=='pdf':
+        extraction['amountPolicy']='Chase checking: negative Amount is money out (debit); positive Amount is money in (credit). Every running balance and the gross deposits/withdrawals reconcile. Money in is not automatically treated as income or a purchase refund.'
+    elif parsed['provider']=='American Express':
         extraction['amountPolicy'] = 'American Express layout: positive Amount values are card charges (debit); negative values are payments or credits (credit). Payment wording suggests a transfer; other credits require review.'
     elif 'amount' not in extraction['columns'] and ('debit' in extraction['columns'] or 'credit' in extraction['columns']):
         extraction['amountPolicy'] = 'The populated Debit/Withdrawal or Credit/Deposit column determines money movement. Both columns populated is a conflict and remains unknown.'
@@ -21,19 +24,22 @@ def finish(parsed):
                  'columns':extraction['columns'],'headers':parsed['headers'],'sheet':extraction.get('sheet')}
     parsed['layout_key'] = hashlib.sha256(json.dumps(signature,sort_keys=True).encode()).hexdigest()
     extraction['layoutKey'] = parsed['layout_key']
-    extraction['datePolicy'] = 'ISO dates are accepted. Numeric month/day/year is attempted before day/month/year; confirm ambiguous dates in the preview.'
+    extraction['datePolicy'] = ('Month/day transaction dates receive the unique year inside the printed statement period, including December/January rollover.' if parsed['format']=='pdf' else 'ISO dates are accepted. Numeric month/day/year is attempted before day/month/year; confirm ambiguous dates in the preview.')
     for tx in parsed['rows']:
         raw = tx['raw']; values = raw['values']; columns = extraction['columns']
         def source(key):
             column = columns.get(key)
             return str(values[column['index']]) if column and column['index']<len(values) else ''
-        if parsed['provider']=='American Express':
+        if parsed['format']=='pdf':
+            movement=('Positive Amount is a bank deposit (credit).' if tx['source_amount_cents']>0 else 'Negative Amount is a bank withdrawal (debit).' if tx['source_amount_cents']<0 else 'Zero amount stays direction-unknown for review.')
+        elif parsed['provider']=='American Express':
             movement = ('Negative' if tx['source_amount_cents']<0 else 'Nonnegative')+' Amount interpreted as '+tx['direction']+' under the confirmed American Express convention.'
         elif 'amount' not in columns:
             movement = 'Debit and Credit source columns were inspected; resulting direction is '+tx['direction']+'.'
         else:
             movement = ('Source Type “'+source('type')+'” maps to '+tx['direction']+'.') if tx['direction']!='unknown' else 'No trusted direction mapping was found. Review this row; the amount sign alone was not used.'
         location = (str(extraction.get('sheet'))+' · ' if extraction.get('sheet') else '')+'row '+str(tx['source_row'])
+        if parsed['format']=='pdf':location='PDF page '+str(tx['source_page'])+' · line '+str(tx['source_row'])
         try: dt.date.fromisoformat(tx['date']); valid_date = True
         except ValueError: valid_date = False
         raw['evidence'] = {

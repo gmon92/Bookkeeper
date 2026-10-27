@@ -260,3 +260,28 @@ test('a failed startup export leaves books connected and usable',async()=>{
   assert.equal(env.context.state.ready,true);
   assert.match(env.messages.at(-1),/Rules JSON could not refresh: File is read-only/);
 });
+
+test('statement uploader accepts a PDF and opens its server preview',async()=>{
+  const env=environment(),previewed=[];
+  env.context.state.connected=true;
+  env.context.toast=()=>{};
+  env.context.fileBase64=async()=> 'synthetic-pdf-bytes';
+  env.context.post=async(route,body)=>{previewed.push({route,body});return {provider:'Chase checking',rowCount:4};};
+  env.context.openImportPreview=()=>previewed.push('opened');
+  vm.runInContext(app.slice(app.indexOf('async function readStatement('),app.indexOf('function openImportPreview(')),env.context);
+  await env.context.readStatement({name:'statement.PDF',size:100});
+  assert.equal(previewed[0].route,'/api/imports/preview');
+  assert.equal(previewed[0].body.filename,'statement.PDF');
+  assert.equal(previewed.at(-1),'opened');
+  assert.equal(env.context.state.loadingFile,false);
+});
+
+test('PDF extraction evidence identifies pages instead of a CSV table',()=>{
+  const env=environment();env.context.e=value=>String(value??'');
+  const setup=fs.readFileSync(path.join(root,'setup.js'),'utf8');
+  vm.runInContext(setup.slice(setup.indexOf('function extractionMarkup('),setup.indexOf('function importExplanationMarkup(')),env.context);
+  const markup=env.context.extractionMarkup({format:'pdf',pageCount:2,provider:'Chase checking',parserVersion:'test',rowCount:17,
+    columns:{},rowSelection:'Transaction tables only',pdfTextPolicy:'Extracted PDF text',amountPolicy:'Signed amounts',datePolicy:'Printed period',categoryPolicy:'Review categories'});
+  assert.match(markup,/PDF · 2 pages · 17 rows/);
+  assert.doesNotMatch(markup,/CSV table|header row|blank rows skipped/);
+});

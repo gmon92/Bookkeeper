@@ -257,24 +257,36 @@ and `category`. File import supports up to 1,000 rules and browser uploads up to
 1. Add a source account using a nickname and optional last four digits. An
    account's business owner organizes accounts; each transaction's business
    assignment determines which books contain it.
-2. In **Imports**, choose a CSV or XLSX statement, inspect the preview, and choose
+2. In **Imports**, choose a CSV, XLSX or supported PDF statement, inspect the preview, and choose
    the source account explicitly. No transactions are saved by previewing.
 3. American Express transaction workbooks have a dedicated adapter. It locates
    the transaction table, preserves worksheet/row references, and reconciles
    charges, credits and net amounts against the summary when present. A mismatch
    stops import. Confirm the provider's sign mapping before committing.
-4. Generic CSV/XLSX tables recognize common date, description, amount, debit,
+4. Text-based **Chase checking PDFs** with a Checking Summary and a
+   `DATE / DESCRIPTION / AMOUNT / BALANCE` transaction table can be imported,
+   including continued tables across pages and December/January year changes.
+   Negative amounts are bank withdrawals; positive amounts are deposits.
+   Every running balance, gross deposits/withdrawals and the closing balance
+   must reconcile before the preview opens. Card-payment descriptions retain
+   transfer kinds; deposits remain money-in activity for review. Select the
+   checking account shown in the preview; known last-four mismatches and credit
+   card accounts are rejected. Confirm extraction and amount mapping to import.
+   The original PDF and extracted page/line text are retained. Scanned/image-only,
+   locked, multi-account and other PDF layouts need CSV/XLSX instead; OCR and
+   generic PDF mapping are not implemented.
+5. Generic CSV/XLSX tables recognize common date, description, amount, debit,
    credit and type headers within the first 50 rows. An ambiguous signed Amount
    column remains direction-unknown for review. Formula-containing transaction
    rows and multiple transaction tables are rejected with an explanation.
-5. New transactions start unapproved, unassigned and outside expense totals before enabled import rules run.
+6. New transactions start unapproved, unassigned and outside expense totals before enabled import rules run.
    Provider categories remain source evidence. Enabled automation rules may assign categories; review business purpose, category,
    direction and kind yourself. Card payments are suggested as transfers; merchant
    credits require review before being treated as refunds.
-6. **Review queue** supports individual editing and batch actions. Expense totals
+7. **Review queue** supports individual editing and batch actions. Expense totals
    accept reviewed business debit expenses/fees and credit refunds only. Personal
    activity, transfers, excluded rows and confirmed duplicates remain searchable.
-7. Exact file re-imports require explicit confirmation. Matching transactions on
+8. Exact file re-imports require explicit confirmation. Matching transactions on
    the same source account are candidates; the transaction drawer lets you mark
    one duplicate or retain both as distinct. Nothing is silently deleted.
 8. The drawer shows source evidence and change history. **Data & storage** lists
@@ -670,9 +682,9 @@ retiring your previous copy.
 
 ## Scope and privacy
 
-- CSV and XLSX import/review/export, bulk categorization and merchant suggestion
-  rules are implemented. PDF, OCR, saved manual column mappings, and a restore
-  wizard remain future work.
+- CSV, XLSX and supported text-based Chase checking PDF imports, review/export,
+  bulk categorization and merchant suggestion rules are implemented. Scanned PDF
+  OCR, other PDF statement layouts and saved manual column mappings remain future work.
 - This is a single-user local app, not a hosted or network accounting service.
 - The web server serves only the interface assets and defined APIs. Project
   documents, source code and data directories are not served as static files.
