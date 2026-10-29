@@ -12,6 +12,35 @@ import test_credits
 
 
 class AccountantSummaryTests(unittest.TestCase):
+    def test_all_businesses_combines_new_business_and_omits_personal_details(self):
+        with server.connect() as db:
+            db.execute("INSERT INTO businesses(id,legal_name,display_name,created_at) VALUES('new-business','New business','New business',?)",(server.utc_now(),))
+            db.execute("UPDATE transactions SET business_id='new-business' WHERE description='SUPPLIER PURCHASE'")
+            db.execute("UPDATE transactions SET classification='personal',business_id=NULL,include_in_totals=0 WHERE description='PLUS MEMBERSHIP'")
+            db.execute("INSERT INTO accounts(id,nickname) VALUES('personal-card','Personal card')")
+        self.fixture.import_csv('personal-card',b'Date,Description,Debit,Credit\n10/01/2026,PERSONAL UNASSIGNED,500.00,\n10/02/2026,BUSINESS ON PERSONAL CARD,25.00,\n')
+        with server.connect() as db:
+            db.execute("UPDATE transactions SET classification='business',business_id='new-business' WHERE description='BUSINESS ON PERSONAL CARD'")
+        workbook,_=self.export('?year=2026')
+        self.addCleanup(workbook.close)
+        detail=workbook['Transactions']
+        records=[dict(zip([c.value for c in detail[5]],row)) for row in detail.iter_rows(min_row=6,values_only=True)]
+        exported_ids={r['Transaction ID'] for r in records}
+        self.assertNotIn(self.fixture.ids['PLUS MEMBERSHIP'],exported_ids)
+        self.assertIn(self.fixture.ids['SUPPLIER PURCHASE'],exported_ids)
+        self.assertTrue(all(r['Classification']!='personal' for r in records))
+        self.assertNotIn('PERSONAL UNASSIGNED',{r['Description'] for r in records})
+        self.assertIn('BUSINESS ON PERSONAL CARD',{r['Description'] for r in records})
+        self.assertEqual(workbook['Accountant Summary']['B8'].value,60)
+        self.assertIn('New business',{c.value for row in workbook['Accountant Summary'] for c in row})
+        self.handler.path='/api/export.csv?year=2026&view=transactions'
+        csv_rows=list(csv.DictReader(io.StringIO(self.handler.export_csv()[0].decode('utf-8-sig'))))
+        self.assertEqual({r['Transaction ID'] for r in csv_rows},exported_ids)
+        self.handler.path='/api/export.pdf?year=2026'
+        with patch('server.pdf_summary',return_value=b'%PDF-example') as renderer:
+            self.handler.export_pdf()
+            self.assertEqual({r['id'] for r in renderer.call_args.args[0]},exported_ids)
+
     def setUp(self):
         self.addCleanup(setattr,server,'PROFILE_PATH',server.PROFILE_PATH)
         self.fixture=test_credits.CreditReviewTests()
@@ -102,7 +131,7 @@ class AccountantSummaryTests(unittest.TestCase):
 
     def test_transaction_details_preserve_outside_activity_and_escape_source_text(self):
         with server.connect() as db:
-            db.execute("UPDATE transactions SET description='=2+2',merchant='@merchant',notes='+private note',classification='personal',business_id=NULL,include_in_totals=0,excluded=1 WHERE description='PLUS MEMBERSHIP'")
+            db.execute("UPDATE transactions SET description='=2+2',merchant='@merchant',notes='+private note',classification='business',include_in_totals=0,excluded=1 WHERE description='PLUS MEMBERSHIP'")
             before=[tuple(r) for r in db.execute('SELECT * FROM transactions ORDER BY id')]
         self.fixture.apply({'ids':[self.fixture.ids['Platinum Walmart+ Credit']],'treatment':'statement_credit'})
         workbook,_=self.export()
@@ -111,11 +140,10 @@ class AccountantSummaryTests(unittest.TestCase):
         records=[dict(zip([c.value for c in detail[5]],row)) for row in detail.iter_rows(min_row=6,values_only=True)]
         personal=next(r for r in records if r['Transaction ID']==self.fixture.ids['PLUS MEMBERSHIP'])
         self.assertEqual((personal['Description'],personal['Merchant'],personal['Notes']),("'=2+2","'@merchant","'+private note"))
-        self.assertEqual((personal['Classification'],personal['Outside totals reason'],personal['Excluded']),('personal','Personal activity',True))
+        self.assertEqual((personal['Classification'],personal['Outside totals reason'],personal['Excluded']),('business','Explicitly excluded activity',True))
         self.assertIsNone(personal['Net expense USD'])
-        benefit=next(r for r in records if r['Transaction ID']==self.fixture.ids['Platinum Walmart+ Credit'])
-        self.assertEqual(benefit['Outside totals reason'],'Statement credits and benefits')
-        self.assertIsNone(benefit['Net expense USD'])
+        # This benefit is classified Personal by its saved credit decision.
+        self.assertNotIn(self.fixture.ids['Platinum Walmart+ Credit'],{r['Transaction ID'] for r in records})
         self.assertTrue(all(cell.data_type!='f' for row in detail for cell in row))
         self.assertEqual(personal['Statement category'],'Benefits')
         self.assertEqual(personal['Source document'],'example.csv')

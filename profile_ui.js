@@ -42,8 +42,17 @@ function profileSettingsMarkup(){
 }
 function updateProfileBadge(){const badge=$('#active-profile-label'),p=state.health?.profile;if(!badge)return;badge.hidden=!p||state.setupRequired;badge.textContent=p?'Profile: '+p.name:'';badge.title=p?p.database+' · '+p.transactionCount+' transactions · '+p.ruleCount+' rules':'';}
 function profileScopeNotice(){return state.transactions.length&&!scopedTransactions().some(inYear)&&!['settings','automation'].includes(state.page)?'<div class="profile-scope-notice"><span>This profile has '+state.transactions.length+' transactions. Your current business or year filter hides them.</span><button type="button" class="text-button" data-profile-show-all>Show all profile transactions</button></div>':'';}
-function transactionSortControl(value,area,groups=false){return '<label class="quick-sort transaction-sort">Sort '+(groups?'groups':'transactions')+'<select data-transaction-sort="'+area+'" aria-label="Sort '+(groups?'groups':area==='credits'?'credit transactions':'transactions')+'">'+quickOptions(groups?[['date-desc','Newest activity'],['date-asc','Oldest activity'],['amount-desc','Largest total'],['amount-asc','Smallest total'],['merchant','Name A–Z']]:[['date-desc','Newest first'],['date-asc','Oldest first'],['amount-desc','Largest amount'],['amount-asc','Smallest amount'],['merchant','Merchant A–Z']],value)+'</select></label>';}
-function sortTransactionRows(rows,sort){return [...rows].sort((a,b)=>(sort==='amount-desc'?b.amountCents-a.amountCents:sort==='amount-asc'?a.amountCents-b.amountCents:sort==='merchant'?(a.merchant||a.description).localeCompare(b.merchant||b.description):sort==='date-asc'?a.date.localeCompare(b.date):b.date.localeCompare(a.date))||a.id.localeCompare(b.id));}
+function transactionSortControl(value,area,groups=false){return '<label class="quick-sort transaction-sort">Sort '+(groups?'groups':'transactions')+'<select data-transaction-sort="'+area+'" aria-label="Sort '+(groups?'groups':area==='credits'?'credit transactions':'transactions')+'">'+quickOptions(groups?[['date-desc','Newest activity'],['date-asc','Oldest activity'],['amount-desc','Largest total'],['amount-asc','Smallest total'],['merchant','Name A–Z']]:[['date-desc','Newest first'],['date-asc','Oldest first'],['amount-desc','Largest amount'],['amount-asc','Smallest amount'],['merchant','Merchant A–Z'],['category-asc','Category A–Z'],['category-desc','Category Z–A'],['account-asc','Account A–Z'],['account-desc','Account Z–A'],['state-asc','Review state A–Z'],['state-desc','Review state Z–A'],['decision-asc','Decision A–Z'],['decision-desc','Decision Z–A']],value)+'</select></label>';}
+function sortTransactionRows(rows,sort){
+  const match=/^(merchant|date|amount|category|account|state|decision)-(asc|desc)$/.exec(sort||'');
+  const key=match?match[1]:sort==='merchant'?'merchant':'date',direction=match?match[2]:sort==='merchant'||sort==='date-asc'||sort==='amount-asc'?'asc':'desc';
+  const value=t=>key==='merchant'?(t.merchant||t.description||''):key==='date'?(t.date||''):key==='amount'?Number(t.amountCents)||0:key==='category'?(t.category||''):key==='account'?(t.account||''):key==='state'?(t.excluded?'Excluded':t.status||''):key==='decision'?(t.creditTreatment||''):'';
+  return [...rows].sort((a,b)=>{const av=value(a),bv=value(b),cmp=typeof av==='number'&&typeof bv==='number'?av-bv:String(av).localeCompare(String(bv),undefined,{numeric:true,sensitivity:'base'});return (direction==='desc'?-cmp:cmp)||a.id.localeCompare(b.id);});
+}
+function tableSortHeader(label,key,sort,area,align='',cellClass=''){
+  const active=(sort||'').startsWith(key+'-')||sort===key,direction=active?(sort.endsWith('-desc')?'descending':'ascending'):'';
+  return '<th'+(cellClass?' class="'+cellClass+'"':'')+(align?' style="text-align:'+align+'"':'')+(active?' aria-sort="'+direction+'"':'')+'><button type="button" class="table-sort-button'+(active?' active':'')+'" data-table-sort="'+area+'" data-sort-key="'+key+'" aria-label="Sort by '+label+(active?' '+direction:'')+'">'+label+'<span aria-hidden="true">'+(active?(direction==='ascending'?'↑':'↓'):'↕')+'</span></button></th>';
+}
 function sortTransactionGroups(groups,sort,label){
   // Sort the group itself by its displayed total, date range or label.
   // Sorting only its member rows leaves the visible group order unchanged.
@@ -73,6 +82,15 @@ document.addEventListener('change',event=>{
   if(file&&file.size>20*1024*1024){event.target.value='';booksSetup.restoreFile=null;$('#books-restore-upload-name').textContent='No uploaded file selected.';$('[data-restore-clear-upload]').hidden=true;toast('For exports larger than 20 MB, use a file path on the server.');return;}
   booksSetup.restoreFile=file||null;$('#books-restore-upload-name').textContent=file?'Selected: '+file.name:'No uploaded file selected.';
   $('[data-restore-clear-upload]').hidden=!file;
+});
+document.addEventListener('click',event=>{
+  const header=event.target.closest('[data-table-sort]');if(!header)return;
+  const area=header.dataset.tableSort,key=header.dataset.sortKey,current=area==='credits'?creditView.sort:triage.sort;
+  const currentDirection=current===key+'-desc'?'desc':current===key+'-asc'||current===key?'asc':'';
+  const next=key+'-'+(currentDirection==='asc'?'desc':'asc');
+  triage.sort=next;creditView.sort=next;saveProfilePreferences({sort:next});
+  const control=document.querySelector('[data-transaction-sort="'+area+'"]');if(control)control.value=next;
+  if(area==='credits')refreshCreditResults();else updateLedger();
 });
 document.addEventListener('change',event=>{
   const el=event.target;

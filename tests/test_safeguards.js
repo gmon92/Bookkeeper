@@ -28,6 +28,21 @@ function environment(approve=false){
 }
 const options=body=>({method:'POST',body:JSON.stringify(body)});
 
+test('all businesses omits unassigned personal account amounts and retains assigned business expenses',()=>{
+  const {context}=environment();
+  context.state.accounts=[{id:'personal'},{id:'business',business_id:'books'}];
+  context.state.transactions=[
+    {id:'unassigned-personal',accountId:'personal',classification:'unknown',amountCents:50000},
+    {id:'assigned-business',accountId:'personal',classification:'business',businessId:'books',amountCents:2500},
+    {id:'business-review',accountId:'business',classification:'unknown',amountCents:1000},
+    {id:'marked-personal',accountId:'business',classification:'personal',amountCents:2000}
+  ];
+  vm.runInContext(app.slice(app.indexOf('function scopedTransactions('),app.indexOf('function inYear(')),context);
+  const rows=context.scopedTransactions();
+  assert.deepEqual(Array.from(rows,r=>r.id),['assigned-business','business-review']);
+  assert.equal(rows.reduce((sum,r)=>sum+r.amountCents,0),3500);
+});
+
 test('profile restore safeguard explains destination and rule differences',()=>{
   const {context}=environment();
   const description=context.protectedActionDescription('/api/setup',options({mode:'restore',directory:'C:\\Restored',sourceDirectory:'backup.zip'}));

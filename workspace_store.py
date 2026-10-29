@@ -108,7 +108,7 @@ def save_profile_settings(db, updates):
         value=updates['workspace']
         if not isinstance(value,str) or (value not in ('all','personal') and not db.execute('SELECT id FROM businesses WHERE id=? AND active=1',(value,)).fetchone()): raise ValueError('Choose a business in this profile.')
     if 'year' in updates and (not isinstance(updates['year'],str) or (updates['year']!='all' and (len(updates['year'])!=4 or not updates['year'].isdigit()))): raise ValueError('Choose a reporting year or all years.')
-    if 'sort' in updates and updates['sort'] not in ('date-desc','date-asc','amount-desc','amount-asc','merchant'):raise ValueError('Choose a valid transaction sort order.')
+    if 'sort' in updates and updates['sort'] not in ('date-desc','date-asc','amount-desc','amount-asc','merchant','merchant-asc','merchant-desc','category-asc','category-desc','account-asc','account-desc','state-asc','state-desc','decision-asc','decision-desc'):raise ValueError('Choose a valid transaction sort order.')
     if 'groupLayout' in updates and updates['groupLayout'] not in ('cards','details'):raise ValueError('Choose Cards or Details for group layout.')
     settings=profile_settings(db)|updates
     db.execute("INSERT INTO app_metadata(key,value) VALUES('profile_settings',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(json.dumps(settings),))

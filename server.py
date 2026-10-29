@@ -1363,7 +1363,7 @@ class Handler(SimpleHTTPRequestHandler):
         business=query.get('businessId',[''])[0]
         year=query.get('year',[''])[0]
         if year and not re.fullmatch(r'\d{4}',year):raise ValueError('Choose a valid reporting year.')
-        where, params = [], []
+        where, params = ["t.classification != 'personal'", "(t.business_id IS NOT NULL OR a.business_id IS NOT NULL)"], []
         with connect() as db:
             label = 'All businesses'
             if business:

@@ -243,7 +243,7 @@ def add_summary_transactions(workbook, rows, business_label, year):
     tab['A2']=safe_text(business_label)
     tab['A3']='Reporting period';tab['B3']=safe_text(year or 'All recorded years')
     tab['D3']='Transactions';tab['E3']=len(rows)
-    tab['A4']='Includes reviewed, pending, personal, excluded and transfer activity in the selected scope. Net expense USD contributes to the summary only when Included in totals is TRUE.'
+    tab['A4']='Includes reviewed, pending, excluded and transfer activity in the selected business scope. Personal transactions are excluded. Net expense USD contributes to the summary only when Included in totals is TRUE.'
     for column,header in enumerate(headers,1):
         cell=tab.cell(5,column,header)
         cell.font=Font(name='Arial',size=10,bold=True,color='FFFFFF')

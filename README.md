@@ -71,8 +71,16 @@ profile**, or use **Restore export / backup** to copy it into new books.
 Reports exports an **accountant summary** with three worksheets: category totals
 and activity outside expense totals on the first, monthly totals on the second,
 and **Transactions** on the third. The selected business and year limit all three
-worksheets. Transactions lists every row in that scope, including pending,
-personal, excluded, duplicate, payment and refund activity. It includes dates,
+worksheets. **All businesses** combines every business in the profile, automatically
+including businesses added later, and excludes transactions classified **Personal**
+from the app view and every report export.
+Unassigned activity on personal or shared accounts also stays in Personal holding
+until assigned to a business. Business expenses paid through those accounts are
+included after business assignment.
+Select the year, open **Reports**, then choose **Export report → Excel** to collect the combined accountant summary and
+transaction details in one workbook. Personal activity remains in **Personal holding**.
+Transactions lists every non-personal row in that scope, including pending,
+excluded, duplicate, payment and refund activity. It includes dates,
 descriptions, businesses, source accounts, categories, amounts, review status,
 totals inclusion and exclusion reasons, source references, notes and transaction
 IDs. Filter the headers or scroll with the date/description columns frozen.
